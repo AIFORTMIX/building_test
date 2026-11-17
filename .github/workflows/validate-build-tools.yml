@@ -1,0 +1,45 @@
+name: Validate build tools
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - 'scripts/**'
+      - 'driver/**'
+      - 'tests/**'
+      - 'build-inputs/**'
+      - 'data/**'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'scripts/**'
+      - 'driver/**'
+      - 'tests/**'
+      - 'build-inputs/**'
+      - 'data/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure test tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v clang >/dev/null || ! command -v make >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y clang make
+          fi
+      - name: Check shell syntax and build boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/build_external_ko.sh
+          python3 -m unittest discover -s tests/build -v

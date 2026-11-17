@@ -1,0 +1,24 @@
+{
+  "tool": "vmlinux-to-elf KallsymsFinder",
+  "version": "1.4.0",
+  "kallsyms_symbol_count": 104984,
+  "kernel_text": "0xffffffc008000000",
+  "raw_image_sha256": "513e85506440bab83097ba3c05216976a96000c9b484d9618d54c9362a05cea0",
+  "checks": {
+    "__ksymtab_": {
+      "matched": 8152,
+      "absent": 0,
+      "mismatch": 0
+    },
+    "__kstrtab_": {
+      "matched": 0,
+      "absent": 8152,
+      "mismatch": 0
+    },
+    "__kstrtabns_": {
+      "matched": 0,
+      "absent": 8152,
+      "mismatch": 0
+    }
+  }
+}

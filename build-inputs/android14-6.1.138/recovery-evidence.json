@@ -1,0 +1,73 @@
+{
+  "scope": "Image built-in (vmlinux) exports only; not separately built modules",
+  "bundle_sha256": "8828ba9b325832bd964d505b31b5052a0143e92bf9e324b232c7d23f0ccabd05",
+  "payload_name": "android14-6.1.138-2025-06-AnyKernel3.zip",
+  "payload_sha256": "0b25127e5f36f9868a959c3d6d410e1ead9eff1d0e265e72cf3a3e06229a09b0",
+  "image_sha256": "513e85506440bab83097ba3c05216976a96000c9b484d9618d54c9362a05cea0",
+  "image_bytes": 37358080,
+  "linux_banner": "Linux version 6.1.138-android14-11-g5929004f86ffc-ab10023717-4k (build-user@build-host) (Android (10087095, +pgo, +bolt, +lto, -mlgo, based on r487747c) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362), LLD 17.0.2) #1 SMP PREEMPT Thu Jan 1 00:00:00 UTC 2026\n",
+  "config_sha256": "abbbe3cd8c0ce80c82dc0c2cc7345af9607af85728904d7b7524e2a8ef002905",
+  "config_bytes": 207654,
+  "phone_config_equals_embedded_config": true,
+  "export_counts": {
+    "EXPORT_SYMBOL": 3244,
+    "EXPORT_SYMBOL_GPL": 4908
+  },
+  "namespace_counts": {
+    "": 8121,
+    "MINIDUMP": 9,
+    "CRYPTO_INTERNAL": 2,
+    "DMA_BUF": 20
+  },
+  "symvers_sha256": "d7764887ece99fee5879296e401f944ad3acc110b0bf95bb2d4b1ba1cb41877a",
+  "table_layout": [
+    {
+      "kind": "EXPORT_SYMBOL",
+      "ksymtab_start": "0xffffffc009702ee0",
+      "ksymtab_stop": "0xffffffc00970c6f0",
+      "kcrctab_start": "0xffffffc00971ad00",
+      "kcrctab_stop": "0xffffffc00971dfb0",
+      "count": 3244
+    },
+    {
+      "kind": "EXPORT_SYMBOL_GPL",
+      "ksymtab_start": "0xffffffc00970c6f0",
+      "ksymtab_stop": "0xffffffc00971ad00",
+      "kcrctab_start": "0xffffffc00971dfb0",
+      "kcrctab_stop": "0xffffffc009722c60",
+      "count": 4908
+    }
+  ],
+  "payload_files": [
+    "Image",
+    "LICENSE",
+    "META-INF/",
+    "META-INF/com/",
+    "META-INF/com/google/",
+    "META-INF/com/google/android/",
+    "META-INF/com/google/android/updater-script",
+    "META-INF/com/google/android/update-binary",
+    "anykernel.sh",
+    "banner",
+    "tools/",
+    "tools/magiskboot",
+    "tools/ak3-core.sh",
+    "tools/httools_static",
+    "tools/lptools_static",
+    "tools/busybox",
+    "tools/fec",
+    "tools/getevent",
+    "tools/snapshotupdater_static",
+    "tools/magiskpolicy"
+  ],
+  "checks": [
+    "payload hash and size",
+    "known Image SHA-256",
+    "ARM64 magic",
+    "byte-identical embedded/phone configs",
+    "PREL32 fields and pointers",
+    "export/CRC count equality",
+    "per-table name ordering",
+    "unique exports"
+  ]
+}

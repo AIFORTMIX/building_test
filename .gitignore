@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.ko
+*.o
+*.mod
+*.mod.c
+.*.cmd
+/ko-output/
+/ko-provenance/
+/android*-*/
+/git-repo/
+/gcc/
+/kernel-build-tools/
+/.cache/
+.env
+*.key
+*.pem

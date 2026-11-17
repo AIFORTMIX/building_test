@@ -1,0 +1,1 @@
+obj-m := qingwei_mcp.o
