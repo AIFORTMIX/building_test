@@ -61,9 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -289,7 +287,7 @@ fun EmptyChatPlaceholder() {
 @Composable
 @Suppress("DEPRECATION")
 fun ChatMessageBubble(message: ChatMessage) {
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberChatCopy()
     val isUser = message.role == MessageRole.USER
     val isTool = message.role == MessageRole.TOOL
 
@@ -353,7 +351,7 @@ fun ChatMessageBubble(message: ChatMessage) {
                         MarkdownMessage(message.content, message.isStreaming, contentColor)
                     }
                     if (!message.isStreaming && message.content.isNotEmpty()) {
-                        TextButton(onClick = { clipboard.setText(AnnotatedString(message.content)) }) {
+                        TextButton(onClick = { copyText(message.content) }) {
                             Text("复制消息", color = contentColor.copy(alpha = .7f), fontSize = 11.sp)
                         }
                     }

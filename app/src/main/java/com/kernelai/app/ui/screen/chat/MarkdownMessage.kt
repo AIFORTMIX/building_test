@@ -13,7 +13,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
@@ -89,11 +88,11 @@ private fun MarkdownBlocks(blocks: List<MdBlock>, color: Color) {
 @Suppress("DEPRECATION")
 @Composable
 private fun CodeBlock(block: MdBlock.Code, color: Color) {
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberChatCopy()
     Column(Modifier.fillMaxWidth().background(color.copy(alpha = .06f), RoundedCornerShape(8.dp))) {
         Row(Modifier.fillMaxWidth().padding(start = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(block.language.ifBlank { "代码" }, color = color.copy(alpha = .7f), fontSize = 11.sp, modifier = Modifier.padding(top = 14.dp))
-            TextButton(onClick = { clipboard.setText(AnnotatedString(block.text)) }) { Text("复制代码", color = color, fontSize = 11.sp) }
+            TextButton(onClick = { copyText(block.text) }) { Text("复制代码", color = color, fontSize = 11.sp) }
         }
         Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp)) {
             Text(block.text, color = color, fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 20.sp, softWrap = false)

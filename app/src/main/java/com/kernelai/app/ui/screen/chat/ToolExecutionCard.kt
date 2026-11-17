@@ -15,8 +15,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -95,7 +93,7 @@ fun ToolExecutionCard(call: ToolCallInfo, color: Color) {
 @Suppress("DEPRECATION")
 @Composable
 private fun ExecutionDetail(label: String, value: String, color: Color, json: Boolean = false) {
-    val clipboard = LocalClipboardManager.current
+    val copyText = rememberChatCopy()
     var showMore by rememberSaveable(value.take(80)) { mutableStateOf(false) }
     val preview = remember(value, showMore, json) {
         val limit = if (showMore) 128_000 else 6_000
@@ -106,7 +104,7 @@ private fun ExecutionDetail(label: String, value: String, color: Color, json: Bo
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = color, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-        TextButton(onClick = { clipboard.setText(AnnotatedString(value)) }) { Text("复制$label", fontSize = 11.sp, color = color) }
+        TextButton(onClick = { copyText(value) }) { Text("复制$label", fontSize = 11.sp, color = color) }
     }
     SelectionContainer {
         Text(preview, color = color, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 19.sp,
