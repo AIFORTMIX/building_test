@@ -1,7 +1,9 @@
-# Qingwei 驱动构建
+# Qingwei App 与驱动构建
 
 本仓库用于通过 GitHub Actions 编译 Qingwei ARM64 内核模块，并检查生成模块
 是否匹配所提供手机镜像的导出符号 CRC 和完整 kernel release。
+
+App 已加入本仓库。推送 App 改动后，[App 构建和模拟联调](https://github.com/AIFORTMIX/building_test/actions/workflows/build-app.yml) 自动编译 APK 并运行模拟 AI → MCP → 测试设备链路及 Android 界面检查。无需真实 AI 密钥或手机。Markdown、会话加载和可展开执行详情的行为及当前限制见 [App 验证说明](docs/APP_VALIDATION.md)。
 
 ## 运行编译
 
@@ -28,7 +30,7 @@
 ## 通用与批量构建
 
 保留单个 C 文件、模块目录、额外编译参数、LTO、localversion、批量版本和 LTS 选项。
-批量通用构建需要清空 `target_symvers`、`expected_kernel_release` 和 `kernel_commit`，
+批量通用构建需要清空 `target_symvers`、`expected_kernel_release`、`kernel_commit` 和 `kernel_build_number`，
 再启用 `build_all_known`。通用模式会记录未执行手机 CRC 验证。
 
 推送到 main 和提交 PR 时自动运行 **Validate build tools**，检查构建脚本及 19 项回归。

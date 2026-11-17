@@ -15,3 +15,10 @@ __pycache__/
 .env
 *.key
 *.pem
+.gradle/
+.kotlin/
+.idea/
+**/build/
+**/.cxx/
+local.properties
+*.jks

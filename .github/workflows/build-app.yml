@@ -1,0 +1,89 @@
+name: Build app and test simulated AI-MCP chain
+
+on:
+  push:
+    branches: [main]
+    paths: ['app/**', 'gradle/**', '*.gradle.kts', 'gradle.properties', 'gradlew*', 'tests/abi/**', '.github/workflows/build-app.yml', 'scripts/run_android_smoke.sh']
+  pull_request:
+    paths: ['app/**', 'gradle/**', '*.gradle.kts', 'gradle.properties', 'gradlew*', 'tests/abi/**', '.github/workflows/build-app.yml', 'scripts/run_android_smoke.sh']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Install pinned SDK and native toolchain
+        run: sdkmanager 'platforms;android-37.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build APKs and run protocol, Markdown and session regressions
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug --console=plain -Pqingwei.abis=arm64-v8a,x86_64
+          python3 tests/abi/check_abi.py
+      - name: Prepare downloadable APKs
+        run: |
+          mkdir -p app-artifacts
+          cp app/build/outputs/apk/debug/app-debug.apk app-artifacts/qingwei-debug.apk
+          cp app/build/outputs/apk/release/app-release-unsigned.apk app-artifacts/qingwei-release-unsigned.apk
+          cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk app-artifacts/qingwei-android-test.apk
+          (cd app-artifacts && sha256sum *.apk > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qingwei-apks
+          path: app-artifacts/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qingwei-host-test-reports
+          path: |
+            app/build/test-results/
+            app/build/reports/tests/
+            app/build/reports/lint-results-debug.*
+          if-no-files-found: warn
+
+  android-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: qingwei-apks
+          path: app-artifacts
+      - name: Enable hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Exercise actual Compose UI and JNI with fixture responses
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_7
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          script: bash scripts/run_android_smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qingwei-android-smoke-reports
+          path: android-smoke-results/
+          if-no-files-found: warn
