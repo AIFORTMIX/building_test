@@ -58,3 +58,9 @@ CI 使用 AOSP GKI manifest 选定通用内核源码，完整构建生成
 用户 KO 工作流及其核心脚本已核查并在本地修订，采用同一内核构建目标的
 Kleaf 外部模块接口或经典 build.sh 流程。下一步运行完整 Linux 构建及目标
 CRC/release 校验，不通过改写模块版本串或 CRC 替代 ABI 验证。
+# 2026-11-18 构建版本信息修正
+
+Actions 44142501274 已完成模块编译，62 个版本符号的 CRC 全部匹配目标 Image；交付阶段因 `6.1.138-android14-11-maybe-dirty` 与目标完整 release 不同而失败。
+
+Kleaf 默认关闭 stamping 时会生成 `-maybe-dirty`。工作流现在显式启用 `--config=stamp`，通过固定的 common 提交生成 Git 后缀，并将原始 Image 的构建标签设为 `BUILD_NUMBER=10023717-4k`。这是在源码构建阶段重建版本标签，CRC 参考文件、编译完成的 ELF 和最终校验均不改写。该标签及 release/CRC 匹配不证明签名、完整 ABI 或设备运行安全。其他目标应填写其原始构建标签或清空 `kernel_build_number`。
+

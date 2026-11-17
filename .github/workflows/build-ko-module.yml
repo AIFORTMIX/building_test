@@ -83,6 +83,11 @@ on:
         required: false
         type: string
         default: "5929004f86ffc02c0b750715ec5a2b1541d14065"
+      kernel_build_number:
+        description: "源码构建标签 BUILD_NUMBER（目标 Image 为 10023717-4k）；其他目标按其原始构建填写或清空"
+        required: false
+        type: string
+        default: "10023717-4k"
       target_symvers:
         description: "目标 CRC 参考文件；批量通用构建时留空，不用于改写模块"
         required: false
@@ -244,6 +249,8 @@ jobs:
       ABK_KO_TARGET_SYMVERS: ${{ inputs.target_symvers }}
       ABK_KO_EXPECTED_RELEASE: ${{ inputs.expected_kernel_release }}
       ABK_KO_KERNEL_COMMIT: ${{ inputs.kernel_commit }}
+      BUILD_NUMBER: ${{ inputs.kernel_build_number }}
+      ABK_KO_BAZEL_ARGS_JSON: '["--config=stamp"]'
 
     steps:
       - name: Checkout
@@ -457,6 +464,8 @@ jobs:
             echo "source_path=${ABK_KO_SOURCE_PATH}"
             echo "module_name=${ABK_KO_MODULE_NAME}"
             echo "validation_scope=构建和请求的 release/CRC 检查；完整 ABI、签名、CFI 及真机稳定性仍需验证"
+            echo "build_number=$BUILD_NUMBER"
+            echo "kleaf_stamping=--config=stamp"
           } >> "$ABK_KO_OUTPUT_DIR/target.txt"
 
       - name: 上传 KO 模块产物
