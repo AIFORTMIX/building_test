@@ -359,6 +359,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/ko-provenance/$CONFIG"
+          exec > >(tee "$GITHUB_WORKSPACE/ko-provenance/$CONFIG/source-sync.log") 2>&1
           git clone "https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-6.4.1.git" gcc
 
           FORMATTED_BRANCH="${{ matrix.android_version }}-${{ matrix.kernel_version }}-${{ matrix.os_patch_level }}"
@@ -377,7 +379,8 @@ jobs:
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> "$GITHUB_ENV"
 
           if [[ -n "$ABK_KO_KERNEL_COMMIT" ]]; then
-            git -C common fetch --depth=1 origin "$ABK_KO_KERNEL_COMMIT"
+            # repo normally names this remote aosp, not origin.
+            git -C common fetch --depth=1 https://android.googlesource.com/kernel/common "$ABK_KO_KERNEL_COMMIT"
             git -C common checkout --detach "$ABK_KO_KERNEL_COMMIT"
           fi
           actual_version=$(awk '/^VERSION =/{v=$3} /^PATCHLEVEL =/{p=$3} /^SUBLEVEL =/{s=$3} END{printf "%s.%s.%s",v,p,s}' common/Makefile)
@@ -461,4 +464,5 @@ jobs:
             ko-output/**/build.log
             ko-output/**/abi-report.json
             ko-output/**/source-manifest.json
+            ko-provenance/**/source-sync.log
           if-no-files-found: ignore
