@@ -391,6 +391,17 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/ko-provenance/$CONFIG"
           "$REPO" manifest -r -o "$GITHUB_WORKSPACE/ko-provenance/$CONFIG/resolved-manifest.xml"
 
+      - name: 恢复内核构建缓存
+        id: cache-kernel
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ${{ env.KERNEL_ROOT }}/out/cache
+          key: qw-kernel-v1-${{ runner.os }}-${{ env.CONFIG }}-${{ matrix.os_patch_level }}-${{ inputs.bazel_lto }}-${{ inputs.kernel_commit }}-${{ github.run_id }}
+          restore-keys: |
+            qw-kernel-v1-${{ runner.os }}-${{ env.CONFIG }}-${{ matrix.os_patch_level }}-${{ inputs.bazel_lto }}-${{ inputs.kernel_commit }}-
+
       - name: 可选匹配目标 uname -r 后缀
         if: ${{ inputs.kernel_localversion != '' }}
         shell: bash
@@ -454,6 +465,15 @@ jobs:
           name: "${{ inputs.module_name }}-${{ matrix.android_version }}-${{ matrix.kernel_version }}.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
           path: ${{ env.ABK_KO_OUTPUT_DIR }}
           if-no-files-found: error
+
+      - name: 保存内核构建缓存
+        if: always() && steps.cache-kernel.outcome == 'success' && steps.cache-kernel.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ${{ env.KERNEL_ROOT }}/out/cache
+          key: ${{ steps.cache-kernel.outputs.cache-primary-key }}
 
       - name: 上传失败诊断（不含 KO）
         if: failure()

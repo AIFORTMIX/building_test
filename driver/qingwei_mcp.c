@@ -444,8 +444,8 @@ struct snapshot_entry {
     u32            x_raw, y_raw, z_raw;
     unsigned long  jiffies_val;
 };
-static struct snapshot_entry g_snapshots[SNAPSHOT_CACHE_SIZE];
-static int g_snapshot_head;
+static struct snapshot_entry g_snapshots[SNAPSHOT_CACHE_SIZE] __maybe_unused;
+static int g_snapshot_head __maybe_unused;
 static int g_snapshot_count;
 static DEFINE_SPINLOCK(g_snapshot_lock);
 #endif /* QINGWEI_HAVE_HW_BREAKPOINT */
@@ -755,7 +755,7 @@ static int resolve_pkg_to_pid(const char *pkg_name, int *out_pid,
  * 检查指定包名的进程是否正在运行
  * 返回: 1 = 运行中, 0 = 未运行, <0 = 错误
  */
-static int check_pkg_running(const char *pkg_name)
+static int __maybe_unused check_pkg_running(const char *pkg_name)
 {
     struct task_struct **tasks;
     size_t task_count = 0, i;
@@ -1140,7 +1140,7 @@ static int enumerate_threads(struct task_struct *task,
 /**
  * 获取模块基址
  */
-static unsigned long get_module_base(struct task_struct *task,
+static unsigned long __maybe_unused get_module_base(struct task_struct *task,
                                       const char *mod_name)
 {
     struct mm_struct *mm = get_task_mm(task);
