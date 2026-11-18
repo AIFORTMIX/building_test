@@ -7,7 +7,7 @@
 
 驱动此前已在 [构建 44245345141](https://github.com/AIFORTMIX/building_test/actions/runs/44245345141) 通过完整 release 和 62 项版本符号 CRC 匹配。本次保持 KO、JNI 与 ioctl ABI 不变，无需重编译 KO。用户已反馈手机驱动与 AI/MCP 可连接；0.2.0 新功能仍需真机验收。
 
-[App 工作流](https://github.com/AIFORTMIX/building_test/actions/workflows/build-app.yml) 自动执行构建和模拟 AI → MCP → 设备边界联调、Android UI/JNI 检查。正式安装只需 Artifact 中的固定签名 `qingwei.apk`，不需要安装测试 APK 或另一个 MCP 宿主。历史验证说明见 [App 验证记录](docs/APP_VALIDATION.md)。
+[App 工作流](https://github.com/AIFORTMIX/building_test/actions/workflows/build-app.yml) 自动执行构建和模拟 AI → MCP → 设备边界联调、Android UI/JNI 检查。[0.2.0 验收构建 44294305778](https://github.com/AIFORTMIX/building_test/actions/runs/44294305778) 已通过 61 项 host 回归、11 项 Android 检查及 Debug/Release/Lint。正式安装只需 Artifact 中的固定签名 `qingwei.apk`，不需要安装测试 APK 或另一个 MCP 宿主。具体证据见 [App 验证记录](docs/APP_VALIDATION.md)。
 
 ## 运行编译
 

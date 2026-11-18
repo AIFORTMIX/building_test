@@ -1,8 +1,12 @@
 # 0.2.0 验收进展
 
-2026-11-18 本地固定签名构建：61 项 host 回归、11 项 Android 模拟器 UI/JNI 检查通过，Debug/Release 及 Lint 编译通过。Lint 为 0 errors / 65 warnings；最终显示修订已通过界面复测，云端 Actions 待验收。新增操作说明见 [Agent App](AGENT_APP.md)。
+2026-11-18 [Actions 44294305778](https://github.com/AIFORTMIX/building_test/actions/runs/44294305778) 全部通过，源码提交 `198c6aa`：61 项 host 回归、11 项 API 35 Android UI/JNI 检查、Debug/Release 及 Lint。Lint 为 0 errors / 65 warnings。本地固定签名构建及 API 37.1 / 16 KiB 的 11 项 UI/JNI 检查也通过。新增操作说明见 [Agent App](AGENT_APP.md)。
+
+云端正式包 `qingwei.apk`（0.2.0 / 200）已下载并独立校验签名和 SHA256；APK SHA256 为 `72f7c34ecdd4062576ce700adff2a3f7e4a546c06b335b856257578634869afb`，固定证书 SHA256 为 `9b22114432e135bf70c8909c8965fc4733eabe822c6e8fee5b7157a703ecca5d`。APK 及测试报告在本地 `outputs/app-validation-2026-11-18/actions-44294305778/` 归档。
 
 最后一轮额外检查了流式长回复各段落的实际高度和相邻段落位置，修复动态追加块的重用引发的换行重叠；自动跟随在布局事件后先挂起，避免强制滚动重新进入尚未结束的测量。测试同时验证手动上滑后不跳回底部、点击“回到最新”后正文完全避开悬浮输入框。暗色产物、工具目的、图片导入、加密模型配置、AI 提问恢复及外部 MCP 开关/调用审计均有实际 Android 交互覆盖。
+
+额外安装固定签名、R8 压缩后的正式包，在 API 37.1 / 16 KiB 模拟器实际完成：添加第二个供应商 → 获取并添加模型 → 设为默认 → 本地模拟模型调用真实内置 MCP 的 `address_calculate` → `ask_user` 等待回答 → 回答后 SSE 正文及 usage → HTML 产物卡片及本机 WebView 预览。回到桌面并强制停止后重新打开，以及切换其他会话再切回，正文、工具结果、产物和模型选择均保留。深色聊天、设置、模型列表显示正常；独立页面已统一避开系统栏，模型“添加”按钮不再被状态栏覆盖。未获得 Root 的进程/断点查询明确返回真实错误。
 
 以下为此前 0.1.0 的历史验收，不代表 0.2.0 尚保留演示界面或只支持旧功能。
 

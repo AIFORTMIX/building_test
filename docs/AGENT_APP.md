@@ -48,7 +48,7 @@ MCP 共 22 项设备/计算工具，新增 `process_resolve`、`address_calculat
 
 ## 外部 MCP 客户端
 
-“设置 → 允许外部客户端接入”默认关闭。开启后主 App 启动前台宿主服务并显示通知，在设备 IPv4 网络接口监听；无需其他宿主 APK。复制页面中的地址和 Authorization 令牌，客户端选择 Streamable HTTP，访问 `POST /mcp`：
+“设置 → 允许外部客户端接入”默认关闭。开启后主 App 启动前台宿主服务，在设备 IPv4 网络接口监听；无需其他宿主 APK。复制页面中的地址和 Authorization 令牌，客户端选择 Streamable HTTP，访问 `POST /mcp`：
 
 ```text
 Authorization: Bearer <页面复制的令牌>
@@ -62,3 +62,13 @@ Content-Type: application/json
 ## 构建签名
 
 非 PR 的 App 工作流需要仓库 Actions Secrets：`QINGWEI_SIGNING_KEYSTORE_B64`、`QINGWEI_STORE_PASSWORD`、`QINGWEI_KEY_ALIAS`、`QINGWEI_KEY_PASSWORD`。它们分别为 PKCS12 的 Base64、存储密码、别名及密钥密码。私钥不会进入 Git、报告或 APK Artifact。PR 检查使用普通测试签名，Release 为 unsigned，不能当作正式升级包。自行本地签名时用同名密码环境变量及 `QINGWEI_KEYSTORE_PATH` 指向私有 PKCS12。
+
+## 真机验收顺序
+
+1. 安装正式 `qingwei.apk`，保留已加载的 KO，授予 Root 并在设置中核对驱动和内置 MCP 的实际状态。
+2. 添加供应商并获取模型，按实际能力设置上下文、输出上限和图像支持。发送普通问题，再选择图片或文本日志检查附件。
+3. 新建两段对话，生成较长回复：上滑时应停留阅读，点击“回到最新”后恢复跟随。切换会话、回到桌面、重新打开后核对正文、工具记录、模型和草稿。
+4. 保持微信运行，让 AI 先调用 `process_resolve` 查询 `com.tencent.mm`，再以 `process_list` 搜索 `tencent`；与 Root 终端的 `pidof com.tencent.mm` 对照。查看工具详情中的扫描完整性和真实返回，不能只比较模型的口头结论。
+5. 先在自己的测试进程验收模块、映射、少量内存读取及明确地址的指针链；之后再验硬件断点和写入。新版本的真机 ioctl 与长期稳定性尚未由模拟器验证。
+6. 让 AI 在不明确的操作前使用 `ask_user`，核对回答后继续、生成中插话和中断发送。临时网络错误在尚无输出时最多额外重试五次，鉴权错误应直接显示。
+7. 需要其他客户端时打开外部接入，使用页面实际地址及令牌调用一个只读工具，在调用记录核对时间、客户端、工具目的和状态；关闭开关后旧外部令牌应失效。
