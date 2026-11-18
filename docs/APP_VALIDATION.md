@@ -1,5 +1,7 @@
 # 0.2.0 验收进展
 
+2026-11-18 用户在完成真机验收建议后反馈：“通过，正常使用”。据此记录 0.2.0 真机基础验收通过。此项为用户反馈，未收集逐项真机日志或长期压力数据，不将其扩展为所有边界场景和驱动长期稳定性均已验证。
+
 2026-11-18 [Actions 44294305778](https://github.com/AIFORTMIX/building_test/actions/runs/44294305778) 全部通过，源码提交 `198c6aa`：61 项 host 回归、11 项 API 35 Android UI/JNI 检查、Debug/Release 及 Lint。Lint 为 0 errors / 65 warnings。本地固定签名构建及 API 37.1 / 16 KiB 的 11 项 UI/JNI 检查也通过。新增操作说明见 [Agent App](AGENT_APP.md)。
 
 云端正式包 `qingwei.apk`（0.2.0 / 200）已下载并独立校验签名和 SHA256；APK SHA256 为 `72f7c34ecdd4062576ce700adff2a3f7e4a546c06b335b856257578634869afb`，固定证书 SHA256 为 `9b22114432e135bf70c8909c8965fc4733eabe822c6e8fee5b7157a703ecca5d`。APK 及测试报告在本地 `outputs/app-validation-2026-11-18/actions-44294305778/` 归档。
