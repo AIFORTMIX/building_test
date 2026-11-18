@@ -139,11 +139,16 @@ class ChatRenderingTest {
         ui.waitUntil(15_000) { !vm.isStreaming.value && vm.messages.value.any { it.content.contains("第 45 节") } }
         ui.waitUntil(10_000) { ui.onAllNodesWithText("第 45 节").fetchSemanticsNodes().isNotEmpty() }
         ui.onNodeWithTag("chat-messages").performScrollToIndex(0)
-        ui.onNodeWithTag("chat-messages").performTouchInput { swipeUp() }
+        ui.onNodeWithTag("chat-messages").performTouchInput { swipeUp(durationMillis = 1_000) }
+        ui.waitUntil(10_000) {
+            !ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config[ChatIsScrolling]
+        }
         ui.waitForIdle()
         val before = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config
+        Assert.assertFalse("Reading history must pause automatic following", before[ChatFollowsLatest])
         val anchorId = before[ChatAnchorMessage]
         val anchorOffset = before[ChatAnchorOffset]
+        screenshot("reading-position-before-switch")
         ui.onNodeWithText("新对话").performClick()
         // Exercise a cold renderer cache as well as the saved LazyListState.
         ui.runOnIdle { repeat(50) { MarkdownDocument.parse("缓存淘汰 $it") } }
@@ -152,6 +157,7 @@ class ChatRenderingTest {
         ui.waitUntil(10_000) { ui.onAllNodesWithTag("chat-messages").fetchSemanticsNodes().isNotEmpty() }
         ui.waitForIdle()
         val after = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config
+        screenshot("reading-position-after-switch")
         Assert.assertEquals(anchorId, after[ChatAnchorMessage])
         Assert.assertEquals(anchorOffset, after[ChatAnchorOffset])
         Assert.assertEquals(1, api.requestCount)

@@ -9,6 +9,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -89,6 +90,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 val ChatAnchorMessage = SemanticsPropertyKey<String>("ChatAnchorMessage")
 val ChatAnchorOffset = SemanticsPropertyKey<Int>("ChatAnchorOffset")
+val ChatIsScrolling = SemanticsPropertyKey<Boolean>("ChatIsScrolling")
+val ChatFollowsLatest = SemanticsPropertyKey<Boolean>("ChatFollowsLatest")
 
 /**
  * AI 聊天界面 - 支持消息气泡、Markdown 渲染、工具调用指示器、连接状态
@@ -185,7 +188,11 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
             if (extra > 0) listState.scrollBy(extra.toFloat())
         }
     }
-    LaunchedEffect(dragged) { if (dragged) following = false }
+    LaunchedEffect(listState) {
+        // Observe the events directly: a short drag can begin and end between two
+        // compositions, so observing only collectIsDraggedAsState can miss it.
+        listState.interactionSource.interactions.collect { if (it is DragInteraction.Start) following = false }
+    }
     LaunchedEffect(listState) {
         snapshotFlow { Triple(listState.isScrollInProgress, listState.canScrollForward,
             listState.layoutInfo.visibleItemsInfo.isNotEmpty()) }.collect { (scrolling, forward, ready) ->
@@ -204,6 +211,8 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
             val index = listState.firstVisibleItemIndex - if (state.hasOlderMessages) 1 else 0
             this[ChatAnchorMessage] = visibleMessages.getOrNull(index)?.id ?: "load-older"
             this[ChatAnchorOffset] = listState.firstVisibleItemScrollOffset
+            this[ChatIsScrolling] = listState.isScrollInProgress
+            this[ChatFollowsLatest] = following
         }, state = listState,
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
