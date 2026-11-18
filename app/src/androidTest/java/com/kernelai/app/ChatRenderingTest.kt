@@ -41,6 +41,21 @@ class ChatRenderingTest {
         path.parentFile!!.mkdirs()
         path.outputStream().use { ui.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
+    private fun waitForSettledViewport() {
+        var previous: Triple<String, Int, Int>? = null
+        var stableSince = System.nanoTime()
+        ui.waitUntil(10_000) {
+            val node = ui.onAllNodesWithTag("chat-messages").fetchSemanticsNodes().singleOrNull()
+            if (node == null || node.config[ChatIsScrolling]) {
+                previous = null; stableSince = System.nanoTime(); false
+            } else {
+                val current = Triple(node.config[ChatAnchorMessage], node.config[ChatAnchorOffset], node.boundsInRoot.height.toInt())
+                if (current != previous) { previous = current; stableSince = System.nanoTime() }
+                System.nanoTime() - stableSince >= 350_000_000L
+            }
+        }
+        ui.waitForIdle()
+    }
     @Test fun markdownDisplaysNativeBlocksAndNeverFetchesImages() {
         val source = """
             # Markdown 格式预览
@@ -138,16 +153,15 @@ class ChatRenderingTest {
         ui.onNodeWithContentDescription("发送").performClick()
         ui.waitUntil(15_000) { !vm.isStreaming.value && vm.messages.value.any { it.content.contains("第 45 节") } }
         ui.waitUntil(10_000) { ui.onAllNodesWithText("第 45 节").fetchSemanticsNodes().isNotEmpty() }
-        ui.onNodeWithTag("chat-messages").performScrollToIndex(0)
-        ui.onNodeWithTag("chat-messages").performTouchInput { swipeUp(durationMillis = 1_000) }
-        ui.waitUntil(10_000) {
-            !ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config[ChatIsScrolling]
-        }
-        ui.waitForIdle()
+        waitForSettledViewport()
+        ui.onNodeWithText("第 45 节").assertIsDisplayed()
+        ui.onNodeWithTag("chat-messages").performTouchInput { swipeDown(durationMillis = 1_000) }
+        waitForSettledViewport()
         val before = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config
         Assert.assertFalse("Reading history must pause automatic following", before[ChatFollowsLatest])
         val anchorId = before[ChatAnchorMessage]
         val anchorOffset = before[ChatAnchorOffset]
+        val paragraphY = ui.onNodeWithText("第 20 节").getUnclippedBoundsInRoot().top
         screenshot("reading-position-before-switch")
         ui.onNodeWithText("新对话").performClick()
         // Exercise a cold renderer cache as well as the saved LazyListState.
@@ -155,11 +169,12 @@ class ChatRenderingTest {
         ui.onNodeWithText("新会话").performClick()
         ui.onNodeWithText("阅读位置测试").performClick()
         ui.waitUntil(10_000) { ui.onAllNodesWithTag("chat-messages").fetchSemanticsNodes().isNotEmpty() }
-        ui.waitForIdle()
+        waitForSettledViewport()
         val after = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config
         screenshot("reading-position-after-switch")
         Assert.assertEquals(anchorId, after[ChatAnchorMessage])
         Assert.assertEquals(anchorOffset, after[ChatAnchorOffset])
+        Assert.assertEquals(paragraphY.value, ui.onNodeWithText("第 20 节").getUnclippedBoundsInRoot().top.value, .5f)
         Assert.assertEquals(1, api.requestCount)
     }
 }

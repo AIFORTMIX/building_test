@@ -63,6 +63,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -106,6 +108,9 @@ fun ChatScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val sessions by viewModel.sessions.collectAsStateWithLifecycle()
     val savedLists = rememberSaveableStateHolder()
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val dismissKeyboard = { focusManager.clearFocus(force = true); keyboard?.hide(); Unit }
     LaunchedEffect(aiConfig) { viewModel.updateAiConfig(aiConfig) }
     // Release saved scroll state for deleted conversations.
     var previousIds by remember { mutableStateOf(emptySet<String>()) }
@@ -116,13 +121,16 @@ fun ChatScreen(
     }
     Column(Modifier.fillMaxSize().padding(contentPadding).imePadding()) {
         ConnectionStatusBar(connectionStatus)
-        ConversationBar(sessions, state.sessionId, viewModel::switchSession, viewModel::newSession, viewModel::clearChat)
+        ConversationBar(sessions, state.sessionId,
+            { dismissKeyboard(); viewModel.switchSession(it) },
+            { dismissKeyboard(); viewModel.newSession() },
+            { dismissKeyboard(); viewModel.clearChat() })
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (state.sessionId.isNotEmpty()) savedLists.SaveableStateProvider(state.sessionId) {
                 ConversationMessages(state, viewModel::loadOlderMessages)
             }
         }
-        ChatInputBar(state.inputText, viewModel::updateInputText, viewModel::sendMessage,
+        ChatInputBar(state.inputText, viewModel::updateInputText, { dismissKeyboard(); viewModel.sendMessage() },
             viewModel::stopStreaming, state.isStreaming, true)
     }
 }
@@ -193,16 +201,15 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
         // compositions, so observing only collectIsDraggedAsState can miss it.
         listState.interactionSource.interactions.collect { if (it is DragInteraction.Start) following = false }
     }
-    LaunchedEffect(listState) {
-        snapshotFlow { Triple(listState.isScrollInProgress, listState.canScrollForward,
-            listState.layoutInfo.visibleItemsInfo.isNotEmpty()) }.collect { (scrolling, forward, ready) ->
-            if (ready && !scrolling && !forward) following = true
+    LaunchedEffect(listState, following) {
+        snapshotFlow {
+            val tail = latest.messages.lastOrNull()
+            val layout = listState.layoutInfo
+            listOf(tail?.id, tail?.content?.length, tail?.toolCalls, layout.totalItemsCount,
+                layout.visibleItemsInfo.lastOrNull()?.size, layout.viewportEndOffset)
         }
-    }
-    LaunchedEffect(listState) {
-        snapshotFlow { latest.messages.lastOrNull()?.let { Triple(it.id, it.content.length, it.toolCalls) } }
             .conflate().collect {
-                if (following && !latestDragged) scrollToBottom()
+                if (following && !latestDragged && !listState.isScrollInProgress) scrollToBottom()
                 delay(80)
             }
     }
@@ -226,7 +233,6 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
             onClick = { following = true },
             modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
         ) { Text("回到最新") }
-        LaunchedEffect(following) { if (following) scrollToBottom() }
     }
 }
 
