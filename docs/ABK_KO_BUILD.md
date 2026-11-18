@@ -1,8 +1,8 @@
 # Qingwei KO 编译流程修复与使用
 
 更新于 2026-11-18。原始下载文件保持不变，修订版本放在本项目中。
-当前完成了构建脚本修正、本地测试和工作流静态检查；尚未运行完整 GitHub
-Actions 内核构建，也没有生成经过目标手机验收的 KO。
+已完成构建脚本修正、本地与云端回归和完整 Actions 内核构建。
+[运行 44245345141](https://github.com/AIFORTMIX/building_test/actions/runs/44245345141)生成的 KO 完整 release 与 62 个版本符号 CRC 均匹配目标镜像。手机装载、签名策略、完整 ABI 和运行稳定性仍未验收。
 
 ## 修正内容
 
@@ -75,6 +75,11 @@ tests/build/
 脚本在 workspace 中沿用其实际内核构建目标，不读取 Image 里的配置来覆盖构建配置。
 
 ```sh
+export KERNEL_ROOT
+export BUILD_NUMBER=10023717-4k
+cp scripts/kernel_workspace_status.py "$KERNEL_ROOT/qw_workspace_status.py"
+chmod +x "$KERNEL_ROOT/qw_workspace_status.py"
+export ABK_KO_BAZEL_ARGS_JSON=$(python3 -c 'import json,os; print(json.dumps(["--config=stamp", "--workspace_status_command=" + os.path.join(os.environ["KERNEL_ROOT"], "qw_workspace_status.py")]))')
 export ABK_KO_LTO=thin
 export ABK_KO_TARGET_SYMVERS="$PWD/build-inputs/android14-6.1.138/Module.symvers"
 export ABK_KO_EXPECTED_RELEASE=6.1.138-android14-11-g5929004f86ffc-ab10023717-4k
@@ -89,7 +94,7 @@ ABK_KO_BAZEL_ARGS 使用 shlex 分词且不执行 eval。LTO 由 ABK_KO_LTO 指�
 
 ## 已执行的验证
 
-- 19 项测试通过：使用 Clang 生成的真实 AArch64 ELF 测试 CRC、release、GPL、
+- 24 项构建回归在 Linux Actions 通过，其中 5 项验证版本生成脚本；另 19 项：使用 Clang 生成的真实 AArch64 ELF 测试 CRC、release、GPL、
   namespace、未版本化导入及损坏输入；使用模拟构建工具测试两个构建分支的
   产物选择、失败传播、目录选项、LTO、通用模式和 Makefile 参数传递。
 - 之前的真实 Qingwei ARM64 Debian 验证 KO，在它对应的 Debian symvers 上
@@ -100,7 +105,7 @@ ABK_KO_BAZEL_ARGS 使用 shlex 分词且不执行 eval。LTO 由 ABK_KO_LTO 指�
 - actionlint 1.7.12 检查新工作流通过；本次未启用其可选 ShellCheck/pyflakes。
 - Bash 语法检查和原有 C/Kotlin ABI/source 回归通过。
 
-本地完整内核构建尚未执行。CRC/release 检查也不能证明 CFI、签名策略、
+完整内核构建已在 Actions 执行，本机 Windows 未重复完整内核编译。CRC/release 检查不能证明 CFI、签名策略、
 所有结构体偏移或手机运行稳定性都已通过。后续依次验收加载/卸载、内存操作、
 进程退出、断点生命周期、并发与持续内存压力。
 

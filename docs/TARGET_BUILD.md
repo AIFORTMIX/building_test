@@ -1,7 +1,9 @@
 # 手机 ABK / Kernel 6.1.138 目标构建说明
 
 更新于 2026-11-18。已获得内核镜像、手机导出配置和恢复的内置导出符号表，
-尚未完成该手机目标的驱动构建与装载验证。
+已完成手机目标的驱动构建及完整 release/CRC 校验，装载和真机运行仍待验证。
+
+[成功运行 44245345141](https://github.com/AIFORTMIX/building_test/actions/runs/44245345141)已生成 `qingwei_mcp.ko`，62 个版本符号 CRC 全部匹配，下载后再次校验通过。SHA256：`a0f95a6e9c13f4c3ff9e21236c6924f7d4e01b67a8b722ebce26a80ab7bfc449`。
 
 ## 已取得的材料
 
@@ -56,11 +58,11 @@ CI 使用 AOSP GKI manifest 选定通用内核源码，完整构建生成
 
 通用 GKI CI 的产物尚不能作为这份 ABK 手机内核的匹配产物。
 用户 KO 工作流及其核心脚本已核查并在本地修订，采用同一内核构建目标的
-Kleaf 外部模块接口或经典 build.sh 流程。下一步运行完整 Linux 构建及目标
-CRC/release 校验，不通过改写模块版本串或 CRC 替代 ABI 验证。
+Kleaf 外部模块接口或经典 build.sh 流程。完整 Linux 构建及目标 CRC/release
+校验已通过，没有通过改写编译后模块的版本串或 CRC 交付产物。
 # 2026-11-18 构建版本信息修正
 
-后续运行 44146552447 已恢复 Git 和构建标签，余下差异为上游固定的 12 位 Git 缩写与目标镜像的 13 位缩写。工作流使用 `kernel_workspace_status.py` 包装上游 workspace status，只调整 common 的 Git 缩写长度，且必须同时匹配实际 40 位 HEAD、原始 stamp 和目标 release 中的 Git 片段。保留 dirty 标记、其他项目元数据、时间戳及构建标签。该脚本和哈希进入构建溯源产物，4 项回归覆盖正确缩写、错误源码拒绝和 dirty 保留。
+后续运行 44146552447 已恢复 Git 和构建标签，余下差异为上游固定的 12 位 Git 缩写与目标镜像的 13 位缩写。工作流使用 `kernel_workspace_status.py` 包装上游 workspace status，只调整 common 的 Git 缩写长度，且必须同时匹配实际 40 位 HEAD、原始 stamp 和目标 release 中的 Git 片段。保留 dirty 标记、其他项目元数据、时间戳及构建标签。该脚本和哈希进入构建溯源产物，5 项回归覆盖正确缩写、错误源码拒绝、dirty 保留和跨目录执行。
 
 Actions 44142501274 已完成模块编译，62 个版本符号的 CRC 全部匹配目标 Image；交付阶段因 `6.1.138-android14-11-maybe-dirty` 与目标完整 release 不同而失败。
 
