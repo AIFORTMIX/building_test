@@ -40,6 +40,9 @@ class DriverViewModel : ViewModel() {
 
     private var initialized = false
     init {
+        viewModelScope.launch { KernelAiApplication.instance.mcpRuntime.state.collect { state ->
+            _connectionStatus.value = _connectionStatus.value.copy(mcpServerRunning = state.running, mcpPort = state.port.takeIf { it > 0 } ?: 8080)
+        } }
         viewModelScope.launch {
             KernelAiApplication.instance.aiConnected.collect { connected ->
                 _connectionStatus.value = _connectionStatus.value.copy(aiConnected = connected)
@@ -92,6 +95,7 @@ class DriverViewModel : ViewModel() {
             val runtime = KernelAiApplication.instance.mcpRuntime
             if (runtime.isRunning) {
                 withContext(Dispatchers.IO) { runtime.stop() }
+                KernelAiApplication.instance.stopService(android.content.Intent(KernelAiApplication.instance, com.kernelai.app.mcp.McpHostService::class.java))
                 _connectionStatus.value = _connectionStatus.value.copy(mcpServerRunning = false)
                 addLog(LogEntry.LogLevel.INFO, LogCategory.MCP, "MCP 服务已停止")
             } else startMcpServer()
@@ -101,16 +105,6 @@ class DriverViewModel : ViewModel() {
     /**
      * 更新 AI 配置
      */
-    fun updateAiConfig(config: AiConfig) {
-        KernelAiApplication.instance.getSharedPreferences("kernel_ai_settings", Context.MODE_PRIVATE)
-            .edit()
-            .putString("ai_base_url", config.baseUrl)
-            .putString("ai_model", config.model)
-            .putString("ai_api_key", config.apiKey)
-            .apply()
-        _appSettings.value = _appSettings.value.copy(aiConfig = config)
-    }
-
     /**
      * 更新主题设置
      */
@@ -161,7 +155,13 @@ class DriverViewModel : ViewModel() {
     private suspend fun startMcpServer() {
         try {
             val runtime = KernelAiApplication.instance.mcpRuntime
-            withContext(Dispatchers.IO) { runtime.start(_appSettings.value.driverSettings.mcpPort) }
+            withContext(Dispatchers.IO) {
+                try { runtime.start(_appSettings.value.driverSettings.mcpPort) }
+                catch (error: Exception) {
+                    if (generateSequence<Throwable>(error) { it.cause }.none { it is java.net.BindException }) throw error
+                    runtime.start(0)
+                }
+            }
             _connectionStatus.value = _connectionStatus.value.copy(mcpServerRunning = runtime.isRunning, mcpPort = runtime.port)
             addLog(LogEntry.LogLevel.INFO, LogCategory.MCP, "本机 MCP 服务已启动，端口 ${runtime.port}")
         } catch (error: Exception) {

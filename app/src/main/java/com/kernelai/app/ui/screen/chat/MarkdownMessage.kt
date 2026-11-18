@@ -7,9 +7,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
+import top.yukonga.miuix.kmp.basic.Text
+import com.kernelai.app.ui.components.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -53,37 +53,47 @@ fun MarkdownMessage(source: String, streaming: Boolean, textColor: Color, modifi
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             val document = blocks
             if (document == null) Text("正在加载内容…", color = textColor, fontSize = 13.sp, lineHeight = 23.sp)
-            else MarkdownBlocks(document, textColor)
+            else {
+                MarkdownBlocks(document, textColor, streaming)
+                if (!streaming) remember(document) { ArtifactLinks.from(document) }.forEach { RemoteArtifactCard(it) }
+            }
         }
     }
 }
 
 @Composable
-private fun MarkdownBlocks(blocks: List<MdBlock>, color: Color) {
-    blocks.forEach { block -> when (block) {
+private fun MarkdownBlocks(blocks: List<MdBlock>, color: Color, streaming: Boolean = false) {
+    blocks.forEachIndexed { index, block -> key(index, block::class) { when (block) {
         is MdBlock.Paragraph -> {
             val size = when (block.level) { 1 -> 25; 2 -> 22; 3 -> 20; 4 -> 18; 5 -> 16; else -> 15 }
-            Text(inlineText(block.text, color), color = color, fontSize = size.sp,
+            Text(streamingText(inlineText(block.text, color), streaming && index == blocks.lastIndex, color), color = color, fontSize = size.sp,
                 lineHeight = (size + 8).sp,
                 fontWeight = if (block.level > 0) FontWeight.Bold else FontWeight.Normal)
         }
         is MdBlock.Quote -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
             Spacer(Modifier.width(3.dp).fillMaxHeight().background(color.copy(alpha = .35f)))
             Column(Modifier.padding(start = 12.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                MarkdownBlocks(block.blocks, color.copy(alpha = .85f))
+                MarkdownBlocks(block.blocks, color.copy(alpha = .85f), streaming && index == blocks.lastIndex)
             }
         }
         is MdBlock.ListBlock -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             block.items.forEach { item -> Row(Modifier.fillMaxWidth()) {
                 Text(item.marker, color = color, fontSize = 15.sp, lineHeight = 23.sp, modifier = Modifier.widthIn(min = 28.dp).padding(end = 6.dp))
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { MarkdownBlocks(item.blocks, color) }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { MarkdownBlocks(item.blocks, color, streaming && index == blocks.lastIndex && item == block.items.last()) }
             } }
         }
-        is MdBlock.Code -> CodeBlock(block, color)
+        is MdBlock.Code -> {
+            if (!streaming && block.language.isNotBlank() && block.text.length >= 80) {
+                CodeArtifactCard(block)
+                var expanded by remember { mutableStateOf(false) }
+                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起代码" else "显示代码", fontSize = 12.sp) }
+                if (expanded) CodeBlock(block, color)
+            } else CodeBlock(block, color)
+        }
         is MdBlock.Table -> MarkdownTable(block, color)
         is MdBlock.Literal -> Text(block.text, color = color, fontSize = 14.sp, lineHeight = 22.sp)
         MdBlock.Rule -> HorizontalDivider(Modifier.padding(vertical = 4.dp), color = color.copy(alpha = .25f))
-    } }
+    } } }
 }
 
 @Suppress("DEPRECATION")

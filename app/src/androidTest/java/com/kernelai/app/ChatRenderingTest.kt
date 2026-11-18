@@ -4,7 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.MaterialTheme
+import com.kernelai.app.ui.theme.KernelAiTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -83,7 +83,7 @@ class ChatRenderingTest {
 
             <script>alert('literal')</script>
         """.trimIndent()
-        ui.setContent { MaterialTheme { Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        ui.setContent { KernelAiTheme { Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             MarkdownMessage(source, false, Color(0xFF202124))
         } } }
         ui.waitUntil(10_000) { ui.onAllNodesWithText("Markdown 格式预览").fetchSemanticsNodes().isNotEmpty() }
@@ -98,14 +98,14 @@ class ChatRenderingTest {
     @Test fun toolDetailsExpandParametersResultAndTiming() {
         val call = ToolCallInfo("call_ui", "process_list", "{\"max_count\":1}",
             "{\"pid\":4321,\"command\":\"demo\"}", ToolCallStatus.COMPLETED, durationMs = 1234)
-        ui.setContent { MaterialTheme { Column(Modifier.fillMaxSize()) { ToolExecutionCard(call, Color(0xFF202124)) } } }
-        ui.onNodeWithText("展开详情 ▾").performClick()
+        ui.setContent { KernelAiTheme { Column(Modifier.fillMaxSize()) { ToolExecutionCard(call, Color(0xFF202124)) } } }
+        ui.onNodeWithContentDescription("展开 process_list 详情").performClick()
         ui.onNodeWithText("调用参数").assertIsDisplayed()
         ui.onNodeWithText("返回结果").assertIsDisplayed()
         ui.onNodeWithText("完成 · 1.2s").assertIsDisplayed()
         ui.onNodeWithText("调用 ID：call_ui").assertIsDisplayed()
         screenshot("tool-execution-expanded")
-        ui.onNodeWithText("收起详情 ▴").performClick()
+        ui.onNodeWithContentDescription("收起 process_list 详情").performClick()
         ui.onNodeWithText("返回结果").assertDoesNotExist()
     }
     @Test fun conversationSwitchRestoresContentAndDraft() {
@@ -114,12 +114,12 @@ class ChatRenderingTest {
             override suspend fun executeTool(name: String, arguments: JsonObject): String = error("No tools expected")
         }
         lateinit var vm: ChatViewModel
-        ui.runOnUiThread { vm = ChatViewModel(tools) {}; store.put("chat", vm) }
+        ui.runOnUiThread { vm = ChatViewModel(tools, storage = null) {}; store.put("chat", vm) }
         val config = AiConfig(api.url("/v1").toString().trimEnd('/'), model = "fixture-model")
         api.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
             "data: {\"choices\":[{\"delta\":{\"content\":\"## 会话一的回复\\n\\n**已加载**\"}}]}\n\n" +
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
-        ui.setContent { CompositionLocalProvider(LocalUiMode provides UiMode.Material) { MaterialTheme {
+        ui.setContent { CompositionLocalProvider(LocalUiMode provides UiMode.Miuix) { KernelAiTheme {
             ChatScreen(ConnectionStatus(), config, vm)
         } } }
         ui.onNodeWithTag("chat-input").performTextInput("第一段提问")
@@ -142,13 +142,13 @@ class ChatRenderingTest {
             override suspend fun executeTool(name: String, arguments: JsonObject): String = error("No tools expected")
         }
         lateinit var vm: ChatViewModel
-        ui.runOnUiThread { vm = ChatViewModel(tools) {}; store.put("scroll-chat", vm) }
+        ui.runOnUiThread { vm = ChatViewModel(tools, storage = null) {}; store.put("scroll-chat", vm) }
         val content = (1..45).joinToString("\n\n") { "### 第 $it 节\n\n这是用于验证阅读位置恢复的长回复。" }
         val escaped = kotlinx.serialization.json.JsonPrimitive(content).toString()
         api.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
             "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":$escaped},\"finish_reason\":\"stop\"}]}"))
         val config = AiConfig(api.url("/v1").toString().trimEnd('/'), model = "fixture-model")
-        ui.setContent { CompositionLocalProvider(LocalUiMode provides UiMode.Material) { MaterialTheme { ChatScreen(ConnectionStatus(), config, vm) } } }
+        ui.setContent { CompositionLocalProvider(LocalUiMode provides UiMode.Miuix) { KernelAiTheme { ChatScreen(ConnectionStatus(), config, vm) } } }
         ui.onNodeWithTag("chat-input").performTextInput("阅读位置测试")
         ui.onNodeWithContentDescription("发送").performClick()
         ui.waitUntil(15_000) { !vm.isStreaming.value && vm.messages.value.any { it.content.contains("第 45 节") } }

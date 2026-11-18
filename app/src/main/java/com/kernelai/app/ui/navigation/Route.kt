@@ -10,6 +10,13 @@ import kotlinx.serialization.Serializable
  * 每个目的地是一个 NavKey (data object/data class)，可保存/恢复到返回栈中
  */
 sealed interface Route : NavKey, Parcelable {
+    @Parcelize
+    @Serializable
+    data object Models : Route
+    @Parcelize
+    @Serializable
+    data object McpAudit : Route
+
 
     /** 主页面容器（包含底部导航） */
     @Parcelize

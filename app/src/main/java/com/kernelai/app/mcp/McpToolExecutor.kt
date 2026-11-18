@@ -20,6 +20,9 @@ class McpToolExecutorImpl(
     private val deviceNode: DriverDevice
 ) : McpToolExecutor {
 
+    private val processQueries = ProcessQueries(deviceNode)
+    private val analysis = MemoryAnalysisTools(::resolvePid, ::readMemoryBytes)
+
     companion object {
         private const val TAG = "McpToolExecutor"
 
@@ -63,11 +66,20 @@ class McpToolExecutorImpl(
 
     override suspend fun executeTool(name: String, arguments: JsonObject): String {
         require(McpToolDefinitions.ALL_TOOLS.any { it.name == name }) { "未知工具: $name" }
+        if (name == "address_calculate") return MemoryAnalysisTools.calculate(arguments).toString()
         ensureDeviceOpen()
 
         return when (name) {
             "process_list"     -> handleProcessList(arguments)
             "process_info"     -> handleProcessInfo(arguments)
+            "process_resolve"  -> processQueries.resolve(arguments["pkg_name"]?.jsonPrimitive?.contentOrNull ?: error("缺少 pkg_name")).json().toString()
+            "address_calculate" -> MemoryAnalysisTools.calculate(arguments).toString()
+            "pointer_chain" -> analysis.chain(arguments).toString()
+            "memory_read_typed" -> analysis.typed(arguments).toString()
+            "memory_read_string" -> analysis.string(arguments).toString()
+            "memory_read_struct" -> analysis.structure(arguments).toString()
+            "memory_inspect" -> analysis.inspect(arguments).toString()
+            "module_address" -> handleModuleAddress(arguments)
             "memory_read"      -> handleMemoryRead(arguments)
             "memory_write"     -> handleMemoryWrite(arguments)
             "memory_search"    -> handleMemorySearch(arguments)
@@ -92,59 +104,7 @@ class McpToolExecutorImpl(
      * process_list - 列出设备上所有正在运行的进程
      * ioctl: CMD_LIST_PROCS
      */
-    private fun handleProcessList(args: JsonObject): String {
-        val offset = args.getInt("offset", 0)
-        val maxCount = args.getInt("max_count", 64)
-        val filter = args.getString("filter")
-
-        val packet = buildProcListPacket(maxCount, offset)
-        val ret = deviceNode.ioctl(IoctlCommands.CMD_LIST_PROCS, packet)
-        if (ret < 0) {
-            throw IOException("ioctl CMD_LIST_PROCS 失败, ret=$ret")
-        }
-
-        val buf = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN)
-        val readMaxCount = buf.int          // max_count (回读)
-        val actualCount = buf.int           // 内核填充的实际数量
-        val totalCount = buf.int            // 内核填充的总数
-        val readOffset = buf.int            // offset (回读)
-
-        // 解析进程条目数据（紧跟在 32 字节头部之后）
-        val procs = if (actualCount > 0 && packet.size > 32) {
-            val procData = packet.copyOfRange(32, packet.size)
-            IoctlStructs.parseProcessInfo(procData, actualCount)
-        } else {
-            emptyList()
-        }
-
-        // 应用包名/命令名过滤
-        val filtered = if (!filter.isNullOrBlank()) {
-            procs.filter {
-                it.cmdline.contains(filter, ignoreCase = true) ||
-                        it.comm.contains(filter, ignoreCase = true)
-            }
-        } else {
-            procs
-        }
-
-        return buildJsonObject {
-            put("total_count", totalCount)
-            put("offset", offset)
-            putJsonArray("processes") {
-                filtered.forEach { proc ->
-                    addJsonObject {
-                        put("pid", proc.pid)
-                        put("ppid", proc.ppid)
-                        put("tgid", proc.tgid)
-                        put("comm", proc.comm)
-                        put("cmdline", proc.cmdline)
-                        put("state", proc.state)
-                        put("thread_count", proc.threadCount)
-                    }
-                }
-            }
-        }.toString()
-    }
+    private suspend fun handleProcessList(args: JsonObject): String = processQueries.list(args)
 
     /**
      * process_info - 获取指定进程的详细信息（模块 + 内存映射 + 线程）
@@ -244,6 +204,36 @@ class McpToolExecutorImpl(
         }.toString()
     }
 
+    private fun readMemoryBytes(pid: Int, address: Long, size: Int): ByteArray {
+        require(size in 1..MAX_MEM_READ_SIZE)
+        val packet = buildRawReadPacket(pid, address, size)
+        val ret = deviceNode.ioctl(IoctlCommands.CMD_RAW_READ, packet)
+        if (ret < 0) throw IOException("CMD_RAW_READ 失败, pid=$pid, address=${hex(address)}, ret=$ret")
+        val buffer = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN)
+        val actual = buffer.getInt(20)
+        if (actual !in 0..size || buffer.getInt(0) != pid || buffer.getLong(8) != address) throw IOException("内存读取回包无效")
+        return packet.copyOfRange(40, 40 + actual)
+    }
+
+    private fun handleModuleAddress(args: JsonObject): String {
+        val pid = resolvePid(args)
+        val name = args.getString("module")?.takeIf { it.isNotBlank() } ?: error("缺少 module 文件名或完整路径")
+        val modules = fetchModuleList(pid)
+        val matches = modules.filter { it.path == name || it.path.substringAfterLast('/') == name }
+        require(matches.size == 1) { "模块匹配数量为 ${matches.size}；请提供准确路径。当前列表上限 256，达到上限时不能据空结果断言模块未加载。" }
+        val module = matches.single()
+        val base = JsonPrimitive(hex(module.baseAddr))
+        val offsets = args["offsets"] ?: JsonArray(emptyList())
+        val calculated = MemoryAnalysisTools.calculate(buildJsonObject { put("base_address", base); put("offsets", offsets) })
+        return buildJsonObject {
+            put("pid", pid); put("module", module.path); put("base_address", base)
+            put("address", calculated["address"]!!); put("steps", calculated["steps"]!!)
+            put("mapping_end", hex(module.endAddr)); put("file_offset", hex(module.offset))
+            put("base_kind", "first_mapping_start"); put("may_be_truncated", modules.size >= 256)
+            put("note", "该基址为驱动返回的首个文件映射起点，不能据此假定整个 ELF 范围或加载偏置。")
+        }.toString()
+    }
+
     /**
      * memory_write - 向目标进程指定地址写入数据
      * ioctl: CMD_WRITE_MEM (legacy)
@@ -336,6 +326,8 @@ class McpToolExecutorImpl(
         return buildJsonObject {
             put("pid", pid)
             put("count", modules.size)
+            put("limit", 256); put("may_be_truncated", modules.size >= 256)
+            put("mapping_scope", "first_mapping_per_file")
             putJsonArray("modules") {
                 modules.forEach { m ->
                     addJsonObject {
@@ -362,8 +354,8 @@ class McpToolExecutorImpl(
 
         val vmas = fetchVmaList(pid)
         val filtered = if (filterExec) {
-            // flags 中 0x1 表示可执行段 (VM_EXEC)
-            vmas.filter { (it.flags and 0x1) != 0 }
+            // Linux VM_EXEC = 0x4; VM_READ = 0x1.
+            vmas.filter { (it.flags and 0x4) != 0 }
         } else {
             vmas
         }
@@ -371,6 +363,7 @@ class McpToolExecutorImpl(
         return buildJsonObject {
             put("pid", pid)
             put("count", filtered.size)
+            put("raw_count", vmas.size); put("limit", 1024); put("may_be_truncated", vmas.size >= 1024)
             putJsonArray("vmas") {
                 filtered.forEach { v ->
                     addJsonObject {
@@ -480,7 +473,7 @@ class McpToolExecutorImpl(
      * ioctl: CMD_HWBP_LIST
      */
     private fun handleBreakpointList(args: JsonObject): String {
-        val pid = resolvePid(args)
+        val pid = args.getInt("pid", 0).also { require(it >= 0) }
 
         val packet = buildHwBpListPacket(pid)
         val ret = deviceNode.ioctl(IoctlCommands.CMD_HWBP_LIST, packet)
@@ -520,6 +513,7 @@ class McpToolExecutorImpl(
         return buildJsonObject {
             put("pid", pid)
             put("total_breakpoints", totalBps)
+            put("scope", "global_hardware_breakpoints"); put("pid_filter_applied", false)
             putJsonArray("breakpoints") {
                 breakpoints.forEach { add(it) }
             }
@@ -690,7 +684,7 @@ class McpToolExecutorImpl(
     // =========================================================================
 
     private fun fetchModuleList(pid: Int): List<IoctlStructs.ModuleInfo> {
-        val packet = buildModuleListPacket(pid, 128)
+        val packet = buildModuleListPacket(pid, 256)
         val ret = deviceNode.ioctl(IoctlCommands.CMD_LIST_MODULES, packet)
         if (ret < 0) throw IOException("ioctl CMD_LIST_MODULES 失败, pid=$pid, ret=$ret")
 
@@ -729,7 +723,7 @@ class McpToolExecutorImpl(
     }
 
     private fun fetchVmaList(pid: Int): List<IoctlStructs.VmaEntry> {
-        val packet = buildVmaListPacket(pid, 256)
+        val packet = buildVmaListPacket(pid, 1024)
         val ret = deviceNode.ioctl(IoctlCommands.CMD_LIST_VMAS, packet)
         if (ret < 0) throw IOException("ioctl CMD_LIST_VMAS 失败, pid=$pid, ret=$ret")
 
@@ -1020,33 +1014,8 @@ class McpToolExecutorImpl(
         throw IllegalArgumentException("必须提供 pid 或 pkg_name 参数")
     }
 
-    /**
-     * 通过包名查找 PID（调用 CMD_LIST_PROCS 遍历）
-     */
-    private fun findPidByPackageName(pkgName: String): Int {
-        val packet = buildProcListPacket(256, 0)
-        val ret = deviceNode.ioctl(IoctlCommands.CMD_LIST_PROCS, packet)
-        if (ret < 0) {
-            throw IOException("通过包名查找 PID 失败, pkg=$pkgName")
-        }
-
-        val buf = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN)
-        val maxCount = buf.int
-        val actualCount = buf.int
-        val totalCount = buf.int
-
-        if (actualCount > 0 && packet.size > 32) {
-            val procData = packet.copyOfRange(32, packet.size)
-            val procs = IoctlStructs.parseProcessInfo(procData, actualCount)
-            val match = procs.find {
-                it.cmdline.contains(pkgName, ignoreCase = true) ||
-                        it.comm.contains(pkgName, ignoreCase = true)
-            }
-            if (match != null) return match.pid
-        }
-
-        throw IllegalArgumentException("未找到匹配包名 '$pkgName' 的进程")
-    }
+    /** Kernel-native exact package lookup covers the complete process snapshot. */
+    private fun findPidByPackageName(pkgName: String): Int = processQueries.requirePid(pkgName)
 
     /** 硬件断点类型字符串 -> 整数值 */
     private fun hwBreakpointTypeToInt(type: String): Int = when (type) {

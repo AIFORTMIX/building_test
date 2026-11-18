@@ -20,22 +20,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Memory
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberSwipeToDismissBoxState
+import com.kernelai.app.ui.components.AlertDialog
+import com.kernelai.app.ui.components.Checkbox
+import com.kernelai.app.ui.components.DropdownMenu
+import com.kernelai.app.ui.components.DropdownMenuItem
+import top.yukonga.miuix.kmp.basic.FloatingActionButton
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import com.kernelai.app.ui.components.OutlinedTextField
+import top.yukonga.miuix.kmp.basic.Surface
+import top.yukonga.miuix.kmp.basic.Text
+import com.kernelai.app.ui.components.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,11 +57,11 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 /**
  * 断点管理器 - 显示/管理断点列表，支持添加/删除/查看寄存器快照
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BreakpointScreen(
     viewModel: BreakpointViewModel = viewModel()
 ) {
+    val status by viewModel.status.collectAsStateWithLifecycle()
     val breakpoints by viewModel.breakpoints.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val selectedBreakpoint by viewModel.selectedBreakpoint.collectAsStateWithLifecycle()
@@ -76,7 +72,11 @@ fun BreakpointScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Text("断点演示", modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+            Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("断点", fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(onClick = viewModel::loadBreakpoints, enabled = !isLoading) { Text("刷新") }
+            }
+            Text(status, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
             // 断点列表
             LazyColumn(
                 modifier = Modifier
@@ -101,45 +101,14 @@ fun BreakpointScreen(
                 }
 
                 items(breakpoints, key = { it.bpIndex }) { bp ->
-                    val dismissState = rememberSwipeToDismissBoxState(
-                        confirmValueChange = { value ->
-                            if (value == SwipeToDismissBoxValue.EndToStart) {
-                                viewModel.removeBreakpoint(bp)
-                                true
-                            } else false
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)) {
+                            BreakpointItem(breakpoint = bp, onClick = { viewModel.selectBreakpoint(bp) },
+                                onToggle = { viewModel.toggleBreakpoint(bp) })
                         }
-                    )
-
-                    SwipeToDismissBox(
-                        state = dismissState,
-                        backgroundContent = {
-                            // 滑动删除背景
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = Color(0xFFF44336),
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(end = 20.dp),
-                                    contentAlignment = Alignment.CenterEnd
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Delete,
-                                        contentDescription = "删除",
-                                        tint = Color.White
-                                    )
-                                }
-                            }
-                        },
-                        enableDismissFromStartToEnd = false
-                    ) {
-                        BreakpointItem(
-                            breakpoint = bp,
-                            onClick = { viewModel.selectBreakpoint(bp) },
-                            onToggle = { viewModel.toggleBreakpoint(bp) }
-                        )
+                        IconButton(onClick = { viewModel.removeBreakpoint(bp) }) {
+                            Icon(Icons.Rounded.Delete, "删除断点", tint = Color(0xFFE45B64))
+                        }
                     }
                 }
 
@@ -163,10 +132,9 @@ fun BreakpointScreen(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp),
-            containerColor = Color(0xFF2196F3),
-            contentColor = Color.White
+            containerColor = Color(0xFF2196F3)
         ) {
-            Icon(imageVector = Icons.Rounded.Add, contentDescription = "添加断点")
+            Icon(imageVector = Icons.Rounded.Add, contentDescription = "添加断点", tint = Color.White)
         }
     }
 
@@ -191,14 +159,8 @@ fun BreakpointItem(
     onToggle: () -> Unit
 ) {
     val uiMode = LocalUiMode.current
-    val cardColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-    }
-    val textColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.onSurface
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.onSurface
-    }
+    val cardColor = MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+    val textColor = MiuixTheme.colorScheme.onSurface
     val statusColor = if (breakpoint.isActive) Color(0xFF4CAF50) else Color(0xFF9E9E9E)
 
     Surface(
@@ -215,10 +177,7 @@ fun BreakpointItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 激活状态指示器
-            Checkbox(
-                checked = breakpoint.isActive,
-                onCheckedChange = { onToggle() }
-            )
+            Text(if (breakpoint.isActive) "●" else "○", color = MiuixTheme.colorScheme.primary)
 
             Spacer(modifier = Modifier.width(8.dp))
 
@@ -294,14 +253,8 @@ fun RegisterSnapshotView(
     onClose: () -> Unit
 ) {
     val uiMode = LocalUiMode.current
-    val cardColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.surfaceVariant
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant
-    }
-    val textColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.onSurface
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.onSurface
-    }
+    val cardColor = MiuixTheme.colorScheme.surfaceVariant
+    val textColor = MiuixTheme.colorScheme.onSurface
 
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -380,7 +333,7 @@ fun AddBreakpointDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("添加断点") },
+        title = { Text("添加硬件断点") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
@@ -394,6 +347,7 @@ fun AddBreakpointDialog(
 
                 // 断点类型选择
                 Box {
+                    TextButton(onClick = { typeMenuExpanded = true }) { Text("类型：${selectedType.displayName} ⌄") }
                     OutlinedTextField(
                         value = selectedType.displayName,
                         onValueChange = {},
@@ -405,7 +359,7 @@ fun AddBreakpointDialog(
                         expanded = typeMenuExpanded,
                         onDismissRequest = { typeMenuExpanded = false }
                     ) {
-                        BreakpointType.entries.forEach { type ->
+                        BreakpointType.entries.filterNot { it == BreakpointType.SW }.forEach { type ->
                             DropdownMenuItem(
                                 text = { Text(type.displayName) },
                                 onClick = {
@@ -430,13 +384,13 @@ fun AddBreakpointDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val address = addressText.removePrefix("0x").removePrefix("0X").toLongOrNull(16)
+                    val address = addressText.removePrefix("0x").removePrefix("0X").toULongOrNull(16)?.toLong()
                     val pid = pidText.toIntOrNull() ?: 0
                     if (address != null) {
                         onConfirm(address, selectedType, pid)
                     }
                 },
-                enabled = addressText.isNotEmpty()
+                enabled = addressText.removePrefix("0x").removePrefix("0X").toULongOrNull(16)?.let { it != 0uL } == true && (pidText.toIntOrNull() ?: 0) > 0
             ) {
                 Text("添加")
             }

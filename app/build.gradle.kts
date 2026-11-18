@@ -54,8 +54,19 @@ android {
         }
     }
 
+    val distributionKey = providers.environmentVariable("QINGWEI_KEYSTORE_PATH").orNull
+    if (!distributionKey.isNullOrBlank()) {
+        signingConfigs.create("distribution") {
+            storeFile = file(distributionKey)
+            storePassword = providers.environmentVariable("QINGWEI_STORE_PASSWORD").get()
+            keyAlias = providers.environmentVariable("QINGWEI_KEY_ALIAS").get()
+            keyPassword = providers.environmentVariable("QINGWEI_KEY_PASSWORD").get()
+            storeType = "PKCS12"
+        }
+    }
     buildTypes {
         release {
+            if (!distributionKey.isNullOrBlank()) signingConfig = signingConfigs.getByName("distribution")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -64,6 +75,7 @@ android {
             )
         }
         debug {
+            if (!distributionKey.isNullOrBlank()) signingConfig = signingConfigs.getByName("distribution")
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
         }
@@ -102,7 +114,6 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
@@ -151,9 +162,6 @@ dependencies {
     implementation(libs.miuix.preference)
     implementation(libs.miuix.blur)
 
-    // Material Kolor (动态配色主题)
-    implementation(libs.material.kolor)
-
     // Commonmark (Markdown 渲染)
     implementation(libs.commonmark)
     implementation(libs.commonmark.ext.gfm.tables)
@@ -171,8 +179,6 @@ dependencies {
 kotlin {
     compilerOptions {
         freeCompilerArgs.addAll(
-            "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
-            "-opt-in=androidx.compose.material3.ExperimentalMaterial3ExpressiveApi",
             "-opt-in=kotlinx.serialization.ExperimentalSerializationApi",
             "-opt-in=kotlinx.coroutines.ExperimentalCoroutinesApi",
         )

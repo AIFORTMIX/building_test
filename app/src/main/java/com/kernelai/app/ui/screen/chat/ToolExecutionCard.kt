@@ -1,15 +1,29 @@
 package com.kernelai.app.ui.screen.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import top.yukonga.miuix.kmp.basic.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.kernelai.app.ui.components.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.Text
+import com.kernelai.app.ui.components.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -42,8 +56,52 @@ fun ExecutionStatus(message: ChatMessage, color: Color) {
     }
     Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (message.isStreaming) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = color)
-        Text(label, fontSize = 12.sp, color = color.copy(alpha = .8f))
+        if (message.isStreaming) CircularProgressIndicator(Modifier.size(14.dp), size = 14.dp, strokeWidth = 2.dp, color = color)
+        Text(label, fontSize = 12.sp, color = color.copy(alpha = .8f), modifier = executionPulse(message.isStreaming))
+    }
+}
+
+@Composable
+fun ToolExecutionGroup(calls: List<ToolCallInfo>, color: Color) {
+    var expanded by rememberSaveable(calls.first().id) { mutableStateOf(true) }
+    val active = calls.any { it.status == ToolCallStatus.RUNNING || it.status == ToolCallStatus.PENDING }
+    val failed = calls.any { it.status == ToolCallStatus.FAILED }
+    val cancelled = calls.any { it.status == ToolCallStatus.CANCELLED }
+    val label = when {
+        active -> "正在执行工具"
+        failed -> "部分工具执行失败"
+        cancelled -> "工具执行已停止"
+        else -> "工具执行完成"
+    }
+    val status = when { active -> ToolCallStatus.RUNNING; failed -> ToolCallStatus.FAILED; cancelled -> ToolCallStatus.CANCELLED; else -> ToolCallStatus.COMPLETED }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().toolOutline(color).clickable { expanded = !expanded }
+            .semantics { heading(); stateDescription = if (expanded) "已展开" else "已折叠" }
+            .padding(horizontal = 14.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+            ToolStateIcon(status)
+            Spacer(Modifier.width(10.dp))
+            Text("$label · ${calls.size} 个", color = color, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.weight(1f).then(executionPulse(active)))
+            Icon(if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                if (expanded) "折叠工具列表" else "展开工具列表", tint = color.copy(alpha = .45f))
+        }
+        if (expanded) calls.forEach { ToolExecutionCard(it, color) }
+    }
+}
+
+private fun Modifier.toolOutline(color: Color) = background(color.copy(alpha = .015f), RoundedCornerShape(18.dp))
+    .border(1.dp, color.copy(alpha = .07f), RoundedCornerShape(18.dp))
+
+@Composable
+private fun ToolStateIcon(status: ToolCallStatus) {
+    val green = Color(0xFF20AE91)
+    when (status) {
+        ToolCallStatus.RUNNING -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.3.dp, color = green)
+        ToolCallStatus.COMPLETED -> Box(Modifier.size(20.dp).background(green, CircleShape), contentAlignment = Alignment.Center) {
+            Icon(Icons.Rounded.Check, "执行成功", tint = Color.White, modifier = Modifier.size(15.dp))
+        }
+        ToolCallStatus.FAILED -> Icon(Icons.Rounded.ErrorOutline, "执行失败", tint = Color(0xFFE45B64), modifier = Modifier.size(21.dp))
+        ToolCallStatus.CANCELLED -> Icon(Icons.Rounded.Close, "已取消", tint = Color(0xFF999DA6), modifier = Modifier.size(20.dp))
+        ToolCallStatus.PENDING -> Icon(Icons.Rounded.Schedule, "等待执行", tint = Color(0xFF999DA6), modifier = Modifier.size(20.dp))
     }
 }
 
@@ -67,20 +125,23 @@ fun ToolExecutionCard(call: ToolCallInfo, color: Color) {
     val duration = call.durationMs ?: call.startedAtMillis?.takeIf { call.status == ToolCallStatus.RUNNING }?.let { (now - it).coerceAtLeast(0) }
     val durationText = duration?.let { " · " + if (it < 1000) "${it}ms" else String.format(Locale.ROOT, "%.1fs", it / 1000.0) }.orEmpty()
     val description = remember(call.name) { McpToolDefinitions.ALL_TOOLS.firstOrNull { it.name == call.name }?.description }
-    Column(Modifier.fillMaxWidth().background(color.copy(alpha = .06f), RoundedCornerShape(8.dp))) {
-        Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (call.status == ToolCallStatus.RUNNING) {
-                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = color)
-                Spacer(Modifier.width(8.dp))
-            }
+    Column(Modifier.fillMaxWidth().testTag("tool-${call.id}").toolOutline(color)) {
+        Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }
+            .semantics { stateDescription = status + if (expanded) "，已展开" else "，已折叠" }
+            .padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+            ToolStateIcon(call.status)
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(call.name.ifBlank { "正在生成工具名称…" }, color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Text(status + durationText, color = color.copy(alpha = .75f), fontSize = 11.sp)
+                Text(toolPurpose(call), color = color, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = executionPulse(call.status in listOf(ToolCallStatus.PENDING, ToolCallStatus.RUNNING)))
+                Text(status + durationText, color = color.copy(alpha = .48f), fontSize = 10.sp)
             }
-            Text(if (expanded) "收起详情 ▴" else "展开详情 ▾", color = color, fontSize = 11.sp)
+            Icon(if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                if (expanded) "收起 ${call.name} 详情" else "展开 ${call.name} 详情", tint = color.copy(alpha = .42f), modifier = Modifier.size(21.dp))
         }
-        if (expanded) Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp).padding(bottom = 10.dp),
+        if (expanded) Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(bottom = 14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("工具：${call.name}", color = color, fontSize = 12.sp)
             description?.let { Text("执行提示：$it", color = color, fontSize = 12.sp, lineHeight = 19.sp) }
             Text("调用 ID：${call.id}", color = color.copy(alpha = .7f), fontSize = 11.sp)
             ExecutionDetail("调用参数", call.arguments.ifBlank { "（尚未接收到参数）" }, color, json = true)

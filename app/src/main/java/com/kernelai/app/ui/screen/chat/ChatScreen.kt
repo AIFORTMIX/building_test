@@ -1,5 +1,15 @@
 package com.kernelai.app.ui.screen.chat
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.rounded.Forum
+import com.kernelai.app.data.ProviderCatalog
+import com.kernelai.app.data.AttachmentStore
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -11,7 +21,19 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.background
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ExpandMore
+import top.yukonga.miuix.kmp.blur.LayerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+import top.yukonga.miuix.kmp.blur.layerBackdrop
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,15 +59,15 @@ import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Circle
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import com.kernelai.app.ui.components.AlertDialog
+import com.kernelai.app.ui.components.DropdownMenu
+import com.kernelai.app.ui.components.DropdownMenuItem
+import com.kernelai.app.ui.components.TextButton
+import com.kernelai.app.ui.components.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.Surface
+import top.yukonga.miuix.kmp.basic.Text
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberUpdatedState
@@ -93,6 +115,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 val ChatAnchorMessage = SemanticsPropertyKey<String>("ChatAnchorMessage")
 val ChatAnchorOffset = SemanticsPropertyKey<Int>("ChatAnchorOffset")
 val ChatIsScrolling = SemanticsPropertyKey<Boolean>("ChatIsScrolling")
+val ChatAtLatest = SemanticsPropertyKey<Boolean>("ChatAtLatest")
 val ChatFollowsLatest = SemanticsPropertyKey<Boolean>("ChatFollowsLatest")
 
 /**
@@ -103,7 +126,12 @@ fun ChatScreen(
     connectionStatus: ConnectionStatus,
     aiConfig: com.kernelai.app.data.model.AiConfig = com.kernelai.app.data.model.AiConfig(),
     viewModel: ChatViewModel = viewModel(),
-    contentPadding: PaddingValues = PaddingValues(0.dp)
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    modelCatalog: ProviderCatalog = ProviderCatalog(),
+    requireModel: Boolean = false,
+    onManageModels: () -> Unit = {},
+    onOpenPage: (Int) -> Unit = {},
+    onOpenUtility: (String) -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val sessions by viewModel.sessions.collectAsStateWithLifecycle()
@@ -111,7 +139,32 @@ fun ChatScreen(
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     val dismissKeyboard = { focusManager.clearFocus(force = true); keyboard?.hide(); Unit }
-    LaunchedEffect(aiConfig) { viewModel.updateAiConfig(aiConfig) }
+    LaunchedEffect(aiConfig, modelCatalog) {
+        if (modelCatalog.activeConfig() == null) viewModel.updateAiConfig(aiConfig)
+        viewModel.updateCatalog(modelCatalog, requireModel)
+    }
+    var showSessions by remember { mutableStateOf(false) }
+    var showModels by remember { mutableStateOf(false) }
+    var showAttachMenu by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val attachmentStore = remember(context) { AttachmentStore(context) }
+    var importingSession by remember { mutableStateOf("") }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) scope.launch {
+            importing = true
+            try {
+                require(uris.size <= 4) { "每条消息最多 4 个附件" }
+                val values = uris.map { attachmentStore.import(it) }
+                viewModel.addAttachments(values, importingSession)
+            } catch (error: Exception) { if (error is CancellationException) throw error; viewModel.reportError("附件添加失败：${error.message}") }
+            finally { importing = false }
+        }
+    }
+    if (showSessions) ConversationList(sessions, state.sessionId, { showSessions = false },
+        { dismissKeyboard(); viewModel.switchSession(it) }, { dismissKeyboard(); viewModel.newSession() }, viewModel::renameSession, viewModel::deleteSession)
+    if (showModels) ModelPicker(modelCatalog, { showModels = false }, viewModel::selectModel, onManageModels)
     // Release saved scroll state for deleted conversations.
     var previousIds by remember { mutableStateOf(emptySet<String>()) }
     LaunchedEffect(sessions) {
@@ -119,32 +172,97 @@ fun ChatScreen(
         (previousIds - current).forEach { savedLists.removeState(it) }
         previousIds = current
     }
-    Column(Modifier.fillMaxSize().padding(contentPadding).imePadding()) {
-        ConnectionStatusBar(connectionStatus)
+    val background = chatBackground()
+    val blurEnabled = glassSupported()
+    val backdrop = rememberLayerBackdrop { drawRect(background); drawContent() }
+    val density = LocalDensity.current
+    var composerHeight by remember { mutableStateOf(116.dp) }
+    Column(Modifier.fillMaxSize().background(background).padding(contentPadding).imePadding()) {
         ConversationBar(sessions, state.sessionId,
             { dismissKeyboard(); viewModel.switchSession(it) },
             { dismissKeyboard(); viewModel.newSession() },
-            { dismissKeyboard(); viewModel.clearChat() })
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (state.sessionId.isNotEmpty()) savedLists.SaveableStateProvider(state.sessionId) {
-                ConversationMessages(state, viewModel::loadOlderMessages)
+            { dismissKeyboard(); viewModel.clearChat() }, onOpenPage, onOpenUtility, { showSessions = true })
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val compact = maxHeight < 260.dp
+            val extrasLimit = (maxHeight - if (compact) 150.dp else 230.dp).coerceAtLeast(0.dp)
+            Box(Modifier.fillMaxSize().then(if (blurEnabled) Modifier.layerBackdrop(backdrop) else Modifier)) {
+                if (state.sessionId.isNotEmpty()) savedLists.SaveableStateProvider(state.sessionId) {
+                    ConversationMessages(state, viewModel::loadOlderMessages, composerHeight)
+                }
+            }
+            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .onSizeChanged { composerHeight = with(density) { it.height.toDp() } }
+                .padding(horizontal = 14.dp).padding(top = 10.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.fillMaxWidth().heightIn(max = extrasLimit).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.loading) Text("正在恢复本地对话…", color = chatForeground(), fontSize = 12.sp)
+                state.error?.let { Text(it, color = MiuixTheme.colorScheme.error, fontSize = 12.sp, maxLines = 3,
+                    modifier = Modifier.fillMaxWidth().background(chatBackground()).padding(8.dp)) }
+                if (importing) Text("正在处理附件…", color = chatForeground(), fontSize = 12.sp)
+                state.question?.let { question ->
+                    GlassSurface(backdrop, Modifier.fillMaxWidth(), RoundedCornerShape(20.dp)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("AI 需要你补充信息", fontWeight = FontWeight.Bold)
+                            Text(question.question, fontSize = 14.sp)
+                            question.options.forEach { answer -> TextButton(onClick = { viewModel.answerQuestion(answer) }) { Text(answer, fontSize = 13.sp) } }
+                            Text("也可以在输入框中回答，或中断后发送新的要求。", fontSize = 11.sp)
+                        }
+                    }
+                }
+                if (state.queued.isNotEmpty()) TextButton(onClick = { if (!state.isStreaming) viewModel.sendMessage() }) {
+                    Text(if (state.isStreaming) "${state.queued.size} 条插话将在下一步处理" else "发送 ${state.queued.size} 条待处理插话", fontSize = 12.sp)
+                }
+                if (state.isStreaming && state.inputText.isNotBlank()) TextButton(onClick = viewModel::interruptAndSend) { Text("中断并发送", fontSize = 12.sp) }
+                if (state.attachments.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    state.attachments.forEach { attachment -> Box(Modifier.width(260.dp)) { AttachmentTile(attachment, { viewModel.removeAttachment(attachment.id) }) } }
+                }
+                }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { dismissKeyboard(); showModels = true }, modifier = Modifier.weight(1f)) { Text(state.modelName.ifBlank { "选择模型" } + " ⌄", maxLines = 1, fontSize = 12.sp, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                    val usage = state.usage
+                    Text(if (usage == null) "上下文 0 / ${state.contextWindow}" else
+                        "${if (usage.estimated) "估算" else "上次实测"} ${usage.promptTokens} / ${state.contextWindow}",
+                        color = chatForeground().copy(alpha = .55f), fontSize = 10.sp)
+                }
+                ChatInputBar(state.inputText, viewModel::updateInputText, { dismissKeyboard(); viewModel.sendMessage() },
+                    viewModel::stopStreaming, state.isStreaming, !state.loading && !importing && (!requireModel || modelCatalog.providers.any { it.models.isNotEmpty() }), backdrop,
+                    { showAttachMenu = true }, state.attachments.isNotEmpty() || state.queued.isNotEmpty(), state.question != null, compact)
+                DropdownMenu(showAttachMenu, onDismissRequest = { showAttachMenu = false }) {
+                    DropdownMenuItem(text = { Text("添加图片") }, onClick = { showAttachMenu = false; importingSession = state.sessionId; picker.launch(arrayOf("image/*")) })
+                    DropdownMenuItem(text = { Text("添加文本文件") }, onClick = { showAttachMenu = false; importingSession = state.sessionId; picker.launch(arrayOf("*/*")) })
+                }
+                if (!compact) ConnectionStatusBar(connectionStatus)
             }
         }
-        ChatInputBar(state.inputText, viewModel::updateInputText, { dismissKeyboard(); viewModel.sendMessage() },
-            viewModel::stopStreaming, state.isStreaming, true)
     }
 }
 
 @Composable
 private fun ConversationBar(sessions: List<AiChatManager.SessionInfo>, activeId: String,
-    onSelect: (String) -> Unit, onNew: () -> Unit, onClear: () -> Unit) {
+    onSelect: (String) -> Unit, onNew: () -> Unit, onClear: () -> Unit,
+    onOpenPage: (Int) -> Unit, onOpenUtility: (String) -> Unit, onSessions: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    var navigationExpanded by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box {
+            IconButton(onClick = { navigationExpanded = true }, modifier = Modifier.background(chatForeground().copy(alpha = .05f), CircleShape)) {
+                Icon(Icons.Rounded.Menu, "打开导航", tint = chatForeground())
+            }
+            DropdownMenu(navigationExpanded, onDismissRequest = { navigationExpanded = false }) {
+                listOf("进程", "断点", "设置").forEachIndexed { index, name ->
+                    DropdownMenuItem(text = { Text(name) }, onClick = { navigationExpanded = false; onOpenPage(index + 1) })
+                }
+                listOf("内存查看", "反汇编", "日志").forEach { name ->
+                    DropdownMenuItem(text = { Text(name) }, onClick = { navigationExpanded = false; onOpenUtility(name) })
+                }
+            }
+        }
         Box(Modifier.weight(1f)) {
             TextButton(onClick = { expanded = true }) {
                 Text(sessions.firstOrNull { it.id == activeId }?.title ?: "新会话", maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, color = chatForeground())
+                Icon(Icons.Rounded.ExpandMore, null, tint = chatForeground().copy(alpha = .45f), modifier = Modifier.size(18.dp))
             }
             DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
                 sessions.forEach { session -> DropdownMenuItem(
@@ -152,6 +270,7 @@ private fun ConversationBar(sessions: List<AiChatManager.SessionInfo>, activeId:
                     onClick = { expanded = false; onSelect(session.id) }) }
             }
         }
+        IconButton(onClick = onSessions) { Icon(Icons.Rounded.Forum, "对话列表", tint = chatForeground()) }
         TextButton(onClick = onNew) { Text("新对话") }
         IconButton(onClick = { confirmClear = true }) { Icon(Icons.Rounded.Delete, "删除当前会话") }
     }
@@ -162,7 +281,7 @@ private fun ConversationBar(sessions: List<AiChatManager.SessionInfo>, activeId:
 }
 
 @Composable
-private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
+private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit, bottomPadding: androidx.compose.ui.unit.Dp) {
     val visibleMessages = remember(state.messages) { state.messages.filterNot { it.role == MessageRole.TOOL } }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex =
         (visibleMessages.lastIndex + if (state.hasOlderMessages) 1 else 0).coerceAtLeast(0))
@@ -181,7 +300,7 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
     }
     if (!restoredContentReady) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(Modifier.size(24.dp))
+            CircularProgressIndicator(Modifier.size(24.dp), size = 24.dp)
         }
         return
     }
@@ -192,7 +311,7 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
         if (last < 0) return
         listState.scrollToItem(last)
         listState.layoutInfo.visibleItemsInfo.lastOrNull()?.let {
-            val extra = it.offset + it.size - listState.layoutInfo.viewportEndOffset
+            val extra = it.offset + it.size - (listState.layoutInfo.viewportEndOffset - listState.layoutInfo.afterContentPadding)
             if (extra > 0) listState.scrollBy(extra.toFloat())
         }
     }
@@ -202,15 +321,24 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
         listState.interactionSource.interactions.collect { if (it is DragInteraction.Start) following = false }
     }
     LaunchedEffect(listState, following) {
+        var previousTail: Pair<String?, Int>? = null
+        var wasGenerating = false
+        var settleUntil = 0L
         snapshotFlow {
             val tail = latest.messages.lastOrNull()
             val layout = listState.layoutInfo
             listOf(tail?.id, tail?.content?.length, tail?.toolCalls, layout.totalItemsCount,
-                layout.visibleItemsInfo.lastOrNull()?.size, layout.viewportEndOffset)
+                layout.visibleItemsInfo.lastOrNull()?.size, layout.viewportEndOffset, layout.afterContentPadding, latest.isStreaming)
         }
             .conflate().collect {
-                if (following && !latestDragged && !listState.isScrollInProgress) scrollToBottom()
+                // layoutInfo can emit inside a measure pass. Suspend before scrolling so
+                // scrollToItem cannot force a nested measure while that pass is active.
                 delay(80)
+                val tail = latest.messages.lastOrNull()
+                val signature = tail?.id to (tail?.content?.length ?: 0)
+                if (signature != previousTail || (wasGenerating && !latest.isStreaming)) settleUntil = System.nanoTime() + 600_000_000L
+                previousTail = signature; wasGenerating = latest.isStreaming
+                if (following && (latest.isStreaming || System.nanoTime() < settleUntil) && !latestDragged && !listState.isScrollInProgress) scrollToBottom()
             }
     }
     Box(Modifier.fillMaxSize()) {
@@ -220,8 +348,12 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
             this[ChatAnchorOffset] = listState.firstVisibleItemScrollOffset
             this[ChatIsScrolling] = listState.isScrollInProgress
             this[ChatFollowsLatest] = following
+            val layout = listState.layoutInfo
+            val last = layout.visibleItemsInfo.lastOrNull()
+            this[ChatAtLatest] = last != null && last.index == layout.totalItemsCount - 1 &&
+                last.offset + last.size <= layout.viewportEndOffset - layout.afterContentPadding + 4
         }, state = listState,
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+            contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 14.dp, bottom = bottomPadding + 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (state.hasOlderMessages) item(key = "load-older") {
                 TextButton(onClick = { following = false; onLoadOlder() }, modifier = Modifier.fillMaxWidth()) { Text("加载更早的消息") }
@@ -231,7 +363,8 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
         }
         if (!following && state.messages.isNotEmpty()) TextButton(
             onClick = { following = true },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = bottomPadding + 8.dp)
+                .background(chatBackground().copy(alpha = .96f), CircleShape)
         ) { Text("回到最新") }
     }
 }
@@ -241,56 +374,21 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
  */
 @Composable
 fun ConnectionStatusBar(status: ConnectionStatus) {
-    val uiMode = LocalUiMode.current
-    val bgColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.surfaceVariant
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant
-    }
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = bgColor,
-        tonalElevation = 1.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            StatusIndicator(
-                label = "驱动",
-                connected = status.driverConnected
-            )
-            StatusIndicator(
-                label = "MCP",
-                connected = status.mcpServerRunning
-            )
-            StatusIndicator(
-                label = "AI",
-                connected = status.aiConnected
-            )
-        }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        StatusIndicator("驱动", status.driverConnected, Modifier.weight(1f))
+        StatusIndicator("MCP", status.mcpServerRunning, Modifier.weight(1f))
+        StatusIndicator("AI", status.aiConnected, Modifier.weight(1f))
     }
 }
 
 @Composable
-fun StatusIndicator(label: String, connected: Boolean) {
-    val color = if (connected) Color(0xFF4CAF50) else Color(0xFFF44336)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(
-            imageVector = Icons.Rounded.Circle,
-            contentDescription = null,
-            tint = color,
-            modifier = Modifier.size(10.dp)
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(
-            text = "$label ${if (connected) "已连接" else "未连接"}",
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium
-        )
+fun StatusIndicator(label: String, connected: Boolean, modifier: Modifier = Modifier) {
+    val color = if (connected) Color(0xFF387FF2) else chatForeground().copy(alpha = .50f)
+    Row(modifier.background(color.copy(alpha = .09f), CircleShape).padding(horizontal = 10.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Rounded.Circle, null, tint = color, modifier = Modifier.size(6.dp))
+        Spacer(Modifier.width(5.dp))
+        Text("$label ${if (connected) "已连接" else "未连接"}", color = color, fontSize = 11.sp, maxLines = 1, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -336,28 +434,12 @@ fun ChatMessageBubble(message: ChatMessage) {
 
     val uiMode = LocalUiMode.current
     val bubbleColor = when {
-        isUser -> when (uiMode) {
-            UiMode.Miuix -> MiuixTheme.colorScheme.primary.copy(alpha = 0.15f)
-            UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer
-        }
-        isTool -> when (uiMode) {
-            UiMode.Miuix -> MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.tertiaryContainer
-        }
-        else -> when (uiMode) {
-            UiMode.Miuix -> MiuixTheme.colorScheme.surfaceVariant
-            UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant
-        }
+        isUser -> MiuixTheme.colorScheme.primary.copy(alpha = 0.15f)
+        isTool -> MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        else -> Color.Transparent
     }
 
-    val contentColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.onSurface
-        UiMode.Material -> when {
-            isUser -> androidx.compose.material3.MaterialTheme.colorScheme.onPrimaryContainer
-            isTool -> androidx.compose.material3.MaterialTheme.colorScheme.onTertiaryContainer
-            else -> androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
-        }
-    }
+    val contentColor = MiuixTheme.colorScheme.onSurface
     val alignment = when {
         isUser -> Alignment.End
         else -> Alignment.Start
@@ -379,10 +461,11 @@ fun ChatMessageBubble(message: ChatMessage) {
             modifier = if (isUser) Modifier.widthIn(max = 360.dp) else Modifier.fillMaxWidth().widthIn(max = 840.dp)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
+                message.attachments.forEach { AttachmentTile(it) }
                 if (!isUser) {
                     ExecutionStatus(message, contentColor)
                     message.toolCalls?.takeIf { it.isNotEmpty() }?.let { calls ->
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { calls.forEach { ToolExecutionCard(it, contentColor) } }
+                        ToolExecutionGroup(calls, contentColor)
                         Spacer(Modifier.height(8.dp))
                     }
                 }
@@ -440,94 +523,33 @@ fun ChatInputBar(
     onSend: () -> Unit,
     onStop: () -> Unit,
     isStreaming: Boolean,
-    isEnabled: Boolean
+    isEnabled: Boolean,
+    backdrop: LayerBackdrop? = null,
+    onAddAttachment: () -> Unit = {},
+    hasAttachments: Boolean = false,
+    answeringQuestion: Boolean = false,
+    compact: Boolean = false
 ) {
-    val uiMode = LocalUiMode.current
-    val surfaceColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.surface
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.surface
-    }
-    val inputBgColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant
-    }
-    val textColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.onSurface
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.onSurface
-    }
-    val hintColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.onSurface.copy(alpha = 0.75f)
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
-    }
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = surfaceColor,
-        tonalElevation = 3.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Bottom
-        ) {
-            // 输入框
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = inputBgColor,
-                modifier = Modifier.weight(1f)
-            ) {
-                if (text.isEmpty()) {
-                    Box(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        contentAlignment = Alignment.CenterStart
-                    ) {
-                        Text(
-                            text = "输入消息...",
-                            color = hintColor,
-                            fontSize = 14.sp
-                        )
-                    }
-                }
-                BasicTextField(
-                    value = text,
-                    onValueChange = onTextChange,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("chat-input")
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    textStyle = TextStyle(
-                        color = textColor,
-                        fontSize = 14.sp
-                    ),
-                    cursorBrush = SolidColor(textColor),
-                    maxLines = 4,
-                    enabled = isEnabled
-                )
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            // 发送/停止按钮
-            if (isStreaming) {
-                IconButton(onClick = onStop) {
-                    Icon(
-                        imageVector = Icons.Rounded.Stop,
-                        contentDescription = "停止",
-                        tint = Color(0xFFF44336)
-                    )
-                }
-            } else {
-                IconButton(
-                    onClick = onSend,
-                    enabled = text.isNotBlank() && isEnabled
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.Send,
-                        contentDescription = "发送",
-                        tint = if (text.isNotBlank()) Color(0xFF2196F3) else Color.Gray
-                    )
-                }
+    val textColor = chatForeground()
+    GlassSurface(backdrop, Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onAddAttachment, enabled = isEnabled) { Icon(Icons.Rounded.Add, "添加附件", tint = textColor.copy(alpha = .6f)) }
+            BasicTextField(value = text, onValueChange = onTextChange,
+                modifier = Modifier.weight(1f).testTag("chat-input").padding(vertical = 9.dp, horizontal = 4.dp),
+                textStyle = TextStyle(color = textColor, fontSize = 15.sp, lineHeight = 22.sp),
+                cursorBrush = SolidColor(Color(0xFF387FF2)), maxLines = if (compact) 2 else 4, enabled = isEnabled,
+                decorationBox = { inner -> Box {
+                    if (text.isEmpty()) Text("问问 AI，分析设备与内存…", color = textColor.copy(alpha = .45f), fontSize = 15.sp)
+                    inner()
+                } })
+            Spacer(Modifier.width(6.dp))
+            val stopButton = isStreaming && text.isBlank() && !hasAttachments
+            val active = isStreaming || ((text.isNotBlank() || hasAttachments) && isEnabled)
+            IconButton(onClick = if (stopButton) onStop else onSend, enabled = active,
+                modifier = Modifier.size(44.dp).background(if (active) textColor else textColor.copy(alpha = .06f), CircleShape)) {
+                Icon(if (stopButton) Icons.Rounded.Stop else Icons.AutoMirrored.Rounded.Send,
+                    if (stopButton) "停止" else if (answeringQuestion) "发送回答" else if (isStreaming) "插话" else "发送", tint = if (active) chatBackground() else textColor.copy(alpha = .28f), modifier = Modifier.size(21.dp))
             }
         }
     }

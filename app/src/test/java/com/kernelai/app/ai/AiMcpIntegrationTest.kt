@@ -359,6 +359,126 @@ class AiMcpIntegrationTest {
         assertEquals(listOf("新问题", "删除后新回复"), vm.messages.value.map { it.content })
     }
 
+    @Test fun interruptedArchiveRestoresPartialTextAfterCompletingMissingToolResults() = runBlocking {
+        val chat = manager()
+        val call = com.kernelai.app.data.model.ApiToolCall("interrupted-tool", function = com.kernelai.app.data.model.ApiFunctionCall("process_list", "{}"))
+        withContext(Dispatchers.Main) {
+            chat.restoreSession("restored-partial", "部分回复", 1, listOf(
+                com.kernelai.app.data.model.ApiChatMessage("user", "分析"),
+                com.kernelai.app.data.model.ApiChatMessage("assistant", "开始读取", toolCalls = listOf(call))), interruptedContent = "已读取部分内容")
+        }
+        val history = chat.getMessages("restored-partial")
+        assertEquals(listOf("user", "assistant", "tool", "assistant"), history.map { it.role })
+        assertEquals("interrupted-tool", history[2].toolCallId)
+        assertEquals("已读取部分内容", history.last().content)
+        assertEquals(0, driver.calls.get())
+    }
+    @Test fun defaultPolicyMakesExactlyFiveRetriesThenStops() = runBlocking {
+        repeat(6) { api.enqueue(MockResponse().setResponseCode(503)) }
+        val pauses = mutableListOf<Long>()
+        val client = OpenAiClient(config(), retryPause = { pauses.add(it) }).also { clients.add(it) }
+        val events = mutableListOf<StreamEvent>()
+        client.streamChatCompletion(listOf(com.kernelai.app.data.model.ApiChatMessage("user", "hello"))).collect { events.add(it) }
+        assertEquals(6, api.requestCount)
+        assertEquals(listOf(1, 2, 3, 4, 5), events.filterIsInstance<StreamEvent.Retrying>().map { it.attempt })
+        assertEquals(listOf(1000L, 2000L, 4000L, 8000L, 16000L), pauses)
+        assertEquals(1, events.filterIsInstance<StreamEvent.Error>().size)
+        assertEquals(0, driver.calls.get())
+    }
+    @Test fun retryIsBoundedAndOnlyBeforeOutput() = runBlocking {
+        api.enqueue(MockResponse().setResponseCode(503)); api.enqueue(response(text("重试成功")))
+        val client = OpenAiClient(config().copy(maxRetries = 1)).also { clients.add(it) }
+        val events = mutableListOf<StreamEvent>()
+        client.streamChatCompletion(listOf(com.kernelai.app.data.model.ApiChatMessage("user", "hello"))).collect { events.add(it) }
+        assertEquals(2, api.requestCount); assertEquals(1, events.filterIsInstance<StreamEvent.Retrying>().size)
+        assertEquals("重试成功", events.filterIsInstance<StreamEvent.ContentDelta>().joinToString("") { it.delta })
+        assertEquals(0, driver.calls.get())
+    }
+    @Test fun partialStreamNeverRetriesAndUsageAfterFinishIsPreserved() = runBlocking {
+        val client = OpenAiClient(config().copy(maxRetries = 2)).also { clients.add(it) }
+        api.enqueue(response(text("部分回复", end = false)))
+        val partial = mutableListOf<StreamEvent>()
+        client.streamChatCompletion(listOf(com.kernelai.app.data.model.ApiChatMessage("user", "hello"))).collect { partial.add(it) }
+        assertTrue(partial.any { it is StreamEvent.Error }); assertFalse(partial.any { it is StreamEvent.Retrying }); assertEquals(1, api.requestCount)
+        api.enqueue(response(text("完成", end = false) + chunk(buildJsonObject {}, "stop") +
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":321,\"completion_tokens\":12,\"total_tokens\":333}}\n\ndata: [DONE]\n\n"))
+        val events = mutableListOf<StreamEvent>()
+        client.streamChatCompletion(listOf(com.kernelai.app.data.model.ApiChatMessage("user", "hello"))).collect { events.add(it) }
+        val usage = events.filterIsInstance<StreamEvent.Usage>().single().usage
+        assertEquals(321, usage.promptTokens); assertEquals(12, usage.completionTokens); assertFalse(usage.estimated)
+    }
+    @Test fun aiCanWaitForAUserAnswerWithoutCallingTheDriver() = runBlocking {
+        val chat = manager()
+        val question = toolDelta(0, "call_question", "ask_user", "{\"question\":\"分析哪个进程？\",\"options\":[\"微信\",\"自己的测试应用\"]}") + chunk(buildJsonObject {}, "tool_calls") + "data: [DONE]\n\n"
+        api.enqueue(response(question)); api.enqueue(response(text("已收到你的选择")))
+        val seen = CopyOnWriteArrayList<ChatEvent>()
+        val collector = launch(Dispatchers.Main, start = CoroutineStart.UNDISPATCHED) { chat.chatEvents.collect { event ->
+            seen.add(event)
+            if (event is ChatEvent.QuestionAsked) assertTrue(chat.answer(chat.getActiveSessionId(), "自己的测试应用"))
+        } }
+        try {
+            withContext(Dispatchers.Main) { chat.sendMessage("先询问目标") }
+            withTimeout(15000) { while (seen.none { it == ChatEvent.GenerationComplete }) delay(10) }
+            assertTrue(seen.any { it is ChatEvent.QuestionAsked }); assertEquals(0, driver.calls.get())
+            nextRequest(); val sent = nextRequest()["messages"]!!.jsonArray
+            val answer = sent.first { it.jsonObject["role"] == JsonPrimitive("tool") }.jsonObject
+            assertEquals("call_question", answer["tool_call_id"]!!.jsonPrimitive.content)
+            assertTrue(answer["content"]!!.jsonPrimitive.content.contains("自己的测试应用"))
+        } finally { collector.cancelAndJoin() }
+    }
+    @Test fun steeringIsInsertedAfterToolResultsBeforeNextModelRequest() = runBlocking {
+        driver.block = true
+        api.enqueue(response(toolResponse())); api.enqueue(response(text("已按补充要求分析")))
+        val chat = manager()
+        val result = async { converse(chat) }
+        assertTrue(withContext(Dispatchers.IO) { driver.started.await(5, TimeUnit.SECONDS) })
+        withContext(Dispatchers.Main) { chat.steer("只读，不要写入", emptyList(), chat.getActiveSessionId()) }
+        driver.release.countDown()
+        val events = result.await(); assertTrue(events.any { it == ChatEvent.GenerationComplete })
+        nextRequest(); val sent = nextRequest()["messages"]!!.jsonArray.map { it.jsonObject }
+        val toolIndex = sent.indexOfLast { it["role"] == JsonPrimitive("tool") }
+        val steerIndex = sent.indexOfLast { it["content"] == JsonPrimitive("只读，不要写入") }
+        assertTrue(toolIndex >= 0 && steerIndex > toolIndex); assertEquals(1, driver.calls.get())
+    }
+    @Test fun imagesAndFilesAreEncodedAsUserContentParts() = runBlocking {
+        val file = java.io.File.createTempFile("qw-test", ".jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        try {
+            api.enqueue(response(text("已收到附件")))
+            val client = OpenAiClient(config().copy(supportsImages = true)).also { clients.add(it) }
+            val attachments = listOf(com.kernelai.app.data.model.Attachment(name = "图像.jpg", mime = "image/jpeg", size = 3, localPath = file.absolutePath),
+                com.kernelai.app.data.model.Attachment(name = "日志.txt", mime = "text/plain", size = 6, localPath = "", textContent = "log内容"))
+            client.streamChatCompletion(listOf(com.kernelai.app.data.model.ApiChatMessage("user", "分析附件", attachments = attachments))).collect {}
+            val parts = nextRequest()["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
+            assertEquals(3, parts.size)
+            assertEquals("data:image/jpeg;base64,AQID", parts[1].jsonObject["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content)
+            assertTrue(parts[2].jsonObject["text"]!!.jsonPrimitive.content.contains("log内容"))
+        } finally { file.delete() }
+    }
+    @Test fun localArchiveRestoresTwoConversationsDraftAndModelHistory() = runBlocking {
+        val directory = java.nio.file.Files.createTempDirectory("qw-archive").toFile()
+        try {
+            val storage = com.kernelai.app.data.ChatStore(java.io.File(directory, "chats.json"))
+            val vm = withContext(Dispatchers.Main) {
+                ChatViewModel(tools, storage) {}.also { stores.add(ViewModelStore().apply { put("saved", it) }) }
+            }
+            withTimeout(5000) { while (vm.uiState.value.loading) delay(10) }
+            withContext(Dispatchers.Main) { vm.updateAiConfig(com.kernelai.app.data.model.AiConfig(config().baseUrl, model = "fixture-model")) }
+            api.enqueue(response(text("持久化回复")))
+            withContext(Dispatchers.Main) { vm.updateInputText("本地会话一"); vm.sendMessage() }
+            withTimeout(15000) { while (vm.isStreaming.value || vm.messages.value.none { it.content == "持久化回复" }) delay(10) }
+            val first = vm.uiState.value.sessionId
+            withContext(Dispatchers.Main) { vm.updateInputText("保留草稿"); vm.newSession(); vm.updateInputText("会话二草稿") }
+            val second = vm.uiState.value.sessionId
+            delay(600)
+            assertEquals(2, storage.load().sessions.size)
+            val restored = withContext(Dispatchers.Main) { ChatViewModel(tools, storage) {}.also { stores.add(ViewModelStore().apply { put("restored", it) }) } }
+            withTimeout(5000) { while (restored.uiState.value.loading) delay(10) }
+            assertEquals(second, restored.uiState.value.sessionId); assertEquals("会话二草稿", restored.inputText.value)
+            withContext(Dispatchers.Main) { restored.switchSession(first) }
+            assertEquals("保留草稿", restored.inputText.value); assertTrue(restored.messages.value.any { it.content == "持久化回复" })
+        } finally { directory.deleteRecursively() }
+    }
+
     private class SimulatedDriver : DriverDevice {
         @Volatile override var isOpen = true
         override val lastError: String get() = "Test driver unavailable"

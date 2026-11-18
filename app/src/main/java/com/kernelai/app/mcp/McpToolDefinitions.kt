@@ -10,11 +10,11 @@ object McpToolDefinitions {
     val ALL_TOOLS = listOf(
         ToolDef(
             name = "process_list",
-            description = "列出设备上所有正在运行的进程。返回每个进程的 PID、包名、命令行、状态和线程数。",
+            description = "分页查询真实进程。指定 filter 时自动跨原始进程页搜索；max_count 是返回匹配条数上限（1..512）。检查 has_more/next_offset/search_complete，空页不代表应用未运行。微信完整包名为 com.tencent.mm，可用 process_resolve 直接核对。",
             params = listOf(
-                Param("offset", "integer", "分页偏移量", false),
+                Param("offset", "integer", "原始进程游标；继续搜索时使用上次 next_offset", false),
                 Param("max_count", "integer", "最大返回数量", false),
-                Param("filter", "string", "包名过滤关键字", false)
+                Param("filter", "string", "匹配 cmdline/comm 的关键字，例 tencent 或 com.tencent.mm；不是应用中文显示名", false)
             )
         ),
         ToolDef(
@@ -66,7 +66,7 @@ object McpToolDefinitions {
         ),
         ToolDef(
             name = "memory_map",
-            description = "列出目标进程的完整虚拟内存映射（VMA 列表）。",
+            description = "读取目标进程 VMA（最多 1024 条）。检查 may_be_truncated；受限列表不能证明其他地址未映射。VM_READ=1、VM_WRITE=2、VM_EXEC=4。",
             params = listOf(
                 Param("pid", "integer", "目标进程 PID", false),
                 Param("pkg_name", "string", "目标包名", false),
@@ -131,12 +131,13 @@ object McpToolDefinitions {
                 Param("pkg_name", "string", "目标包名", false)
             )
         )
-    )
+    ) + MemoryToolDefinitions.tools
     
     data class ToolDef(
         val name: String,
         val description: String,
-        val params: List<Param>
+        val params: List<Param>,
+        val schema: JsonObject? = null
     )
     
     data class Param(
@@ -147,7 +148,7 @@ object McpToolDefinitions {
     )
     
     fun toJsonSchema(tool: ToolDef): JsonObject {
-        return buildJsonObject {
+        val base = tool.schema ?: buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {
                 tool.params.forEach { param ->
@@ -162,6 +163,13 @@ object McpToolDefinitions {
                 putJsonArray("required") {
                     required.forEach { add(it) }
                 }
+            }
+        }
+        return buildJsonObject {
+            base.forEach { (key, value) -> if (key != "properties") put(key, value) }
+            putJsonObject("properties") {
+                base["properties"]?.jsonObject?.forEach { (key, value) -> put(key, value) }
+                putJsonObject("_purpose") { put("type", "string"); put("description", "用简短中文说明这次调用是为了做什么，供执行卡片展示"); put("maxLength", 160) }
             }
         }
     }

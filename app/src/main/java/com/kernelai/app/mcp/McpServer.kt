@@ -87,6 +87,10 @@ class McpServer(
                         put("name", tool.name)
                         put("description", tool.description)
                         put("inputSchema", tool.inputSchema)
+                        putJsonObject("annotations") {
+                            val mutates = tool.name in setOf("memory_write", "breakpoint_set", "breakpoint_remove")
+                            put("readOnlyHint", !mutates); put("destructiveHint", mutates); put("openWorldHint", false)
+                        }
                     }
                 }
             }
@@ -111,6 +115,8 @@ class McpServer(
         return try {
             val result = toolExecutor.executeTool(toolName, arguments)
             buildJsonRpcResponse(id, buildJsonObject {
+                val payloadError = runCatching { Json.parseToJsonElement(result).jsonObject["is_error"]?.jsonPrimitive?.booleanOrNull }.getOrNull() == true
+                if (payloadError) put("isError", true)
                 putJsonArray("content") {
                     addJsonObject {
                         put("type", "text")

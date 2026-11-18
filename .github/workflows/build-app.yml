@@ -32,7 +32,20 @@ jobs:
       - name: Install pinned SDK and native toolchain
         run: sdkmanager 'platforms;android-37.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
       - uses: gradle/actions/setup-gradle@v4
+      - name: Restore stable APK signing key
+        if: github.event_name != 'pull_request'
+        env:
+          QINGWEI_SIGNING_KEYSTORE_B64: ${{ secrets.QINGWEI_SIGNING_KEYSTORE_B64 }}
+        run: |
+          test -n "$QINGWEI_SIGNING_KEYSTORE_B64" || { echo 'Configure the Qingwei signing Secrets before building installable APKs.'; exit 1; }
+          umask 077
+          printf '%s' "$QINGWEI_SIGNING_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/qingwei-signing.p12"
       - name: Build APKs and run protocol, Markdown and session regressions
+        env:
+          QINGWEI_KEYSTORE_PATH: ${{ github.event_name != 'pull_request' && format('{0}/qingwei-signing.p12', runner.temp) || '' }}
+          QINGWEI_STORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.QINGWEI_STORE_PASSWORD || '' }}
+          QINGWEI_KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.QINGWEI_KEY_ALIAS || '' }}
+          QINGWEI_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.QINGWEI_KEY_PASSWORD || '' }}
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug --console=plain -Pqingwei.abis=arm64-v8a,x86_64
@@ -41,9 +54,28 @@ jobs:
         run: |
           mkdir -p app-artifacts
           cp app/build/outputs/apk/debug/app-debug.apk app-artifacts/qingwei-debug.apk
-          cp app/build/outputs/apk/release/app-release-unsigned.apk app-artifacts/qingwei-release-unsigned.apk
           cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk app-artifacts/qingwei-android-test.apk
+          python3 - <<'PY'
+          import json, shutil
+          from pathlib import Path
+          directory = Path('app/build/outputs/apk/release')
+          metadata = json.loads((directory / 'output-metadata.json').read_text())
+          name = metadata['elements'][0]['outputFile']
+          if name not in ('app-release.apk', 'app-release-unsigned.apk'):
+              raise SystemExit('Unexpected release output')
+          target = 'qingwei.apk' if name == 'app-release.apk' else 'qingwei-release-unsigned.apk'
+          shutil.copyfile(directory / name, Path('app-artifacts') / target)
+          PY
           (cd app-artifacts && sha256sum *.apk > SHA256SUMS)
+      - name: Verify installable release signature
+        if: github.event_name != 'pull_request'
+        run: |
+          test -f app-artifacts/qingwei.apk
+          signer=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          "$signer" verify --print-certs app-artifacts/qingwei.apk > app-artifacts/SIGNING.txt
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/qingwei-signing.p12"
       - uses: actions/upload-artifact@v4
         with:
           name: qingwei-apks

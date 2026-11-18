@@ -6,6 +6,7 @@ import java.util.UUID
 /**
  * UI 层聊天消息模型
  */
+@Serializable
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val role: MessageRole,
@@ -13,7 +14,8 @@ data class ChatMessage(
     val timestamp: Long = System.currentTimeMillis(),
     val toolCalls: List<ToolCallInfo>? = null,
     val isStreaming: Boolean = false,
-    val phase: AssistantPhase? = null
+    val phase: AssistantPhase? = null,
+    val attachments: List<Attachment> = emptyList()
 )
 
 /**
@@ -29,6 +31,7 @@ enum class MessageRole {
 /**
  * 工具调用信息（UI 展示用）
  */
+@Serializable
 data class ToolCallInfo(
     val id: String,
     val name: String,
@@ -61,7 +64,8 @@ data class ApiChatMessage(
     val content: String?,
     val toolCalls: List<ApiToolCall>? = null,
     val toolCallId: String? = null,
-    val name: String? = null
+    val name: String? = null,
+    val attachments: List<Attachment> = emptyList()
 )
 
 @Serializable
@@ -123,3 +127,14 @@ fun ChatMessage.toApiMessage(): ApiChatMessage {
         name = if (role == MessageRole.TOOL) toolCalls?.firstOrNull()?.name else null
     )
 }
+
+@Serializable
+data class Attachment(val id: String = UUID.randomUUID().toString(), val name: String, val mime: String,
+    val size: Long, val localPath: String, val textContent: String? = null) {
+    val isImage: Boolean get() = mime.startsWith("image/")
+}
+@Serializable
+data class ContextUsage(val promptTokens: Int, val completionTokens: Int = 0, val estimated: Boolean = true)
+
+@Serializable
+data class UserQuestion(val callId: String, val question: String, val options: List<String> = emptyList())

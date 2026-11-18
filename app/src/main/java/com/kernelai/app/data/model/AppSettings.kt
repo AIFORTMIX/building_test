@@ -18,7 +18,12 @@ data class AiConfig(
     val apiKey: String = "",
     val model: String = "qwen2.5:7b",
     val maxTokens: Int = 4096,
-    val temperature: Double = 0.7
+    val temperature: Double = 0.7,
+    val contextWindow: Int = 32768,
+    val supportsImages: Boolean = false,
+    val providerId: String = "",
+    val maxRetries: Int = 5,
+    val streamUsage: Boolean = true
 )
 
 /**
@@ -39,8 +44,7 @@ enum class ThemeMode(val value: Int, val displayName: String) {
  * UI 风格
  */
 enum class UiStyle(val value: String, val displayName: String) {
-    MIUIX("miuix", "Miuix"),
-    MATERIAL("material", "Material");
+    MIUIX("miuix", "Miuix");
 
     companion object {
         fun fromValue(value: String): UiStyle =

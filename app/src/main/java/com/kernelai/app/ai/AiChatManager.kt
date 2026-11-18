@@ -19,6 +19,8 @@ class AiChatManager(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val sessions = ConcurrentHashMap<String, ChatSession>()
+    private val steering = mutableMapOf<String, ArrayDeque<ApiChatMessage>>()
+    private val answers = mutableMapOf<String, CompletableDeferred<String>>()
     private val generationLock = Mutex()
     private var activeSessionId: String? = null
     private var currentJob: Job? = null
@@ -60,6 +62,7 @@ class AiChatManager(
     fun deleteSession(sessionId: String) {
         if (activeSessionId == sessionId) cancelGeneration()
         sessions.remove(sessionId)
+        steering.remove(sessionId); answers.remove(sessionId)?.cancel()
         if (activeSessionId == sessionId) activeSessionId = sessions.keys.firstOrNull()
         publishSessions()
     }
@@ -69,17 +72,72 @@ class AiChatManager(
         return sessions[id]?.messages?.toList().orEmpty()
     }
 
-    fun sendMessage(content: String, sessionId: String? = null) {
-        if (content.isBlank()) return
+    fun restoreSession(id: String, title: String, createdAt: Long, messages: List<ApiChatMessage>, interruptedContent: String? = null) {
+        val history = messages.toMutableList()
+        // A killed app may leave a completed tool-call message without tool responses.
+        val last = history.indexOfLast { it.role == "assistant" && !it.toolCalls.isNullOrEmpty() }
+        if (last >= 0) {
+            val finished = history.drop(last + 1).mapNotNull { it.toolCallId }.toSet()
+            history[last].toolCalls.orEmpty().filterNot { it.id in finished }.forEach { call ->
+                history.add(ApiChatMessage("tool", "Error: 应用上次退出，操作结果未确认", toolCallId = call.id, name = call.function.name))
+            }
+        }
+        if (!interruptedContent.isNullOrBlank() && history.lastOrNull { it.role == "assistant" }?.content != interruptedContent) {
+            history.add(ApiChatMessage("assistant", interruptedContent))
+        }
+        sessions[id] = ChatSession(id, history, createdAt, title)
+        publishSessions()
+    }
+    fun renameSession(id: String, title: String) { sessions[id]?.title = title.trim().take(80).ifEmpty { "新会话" }; publishSessions() }
+
+    fun sendMessage(content: String, sessionId: String? = null, attachments: List<com.kernelai.app.data.model.Attachment> = emptyList()) {
+        if (content.isBlank() && attachments.isEmpty()) return
         val session = sessions[sessionId ?: getActiveSessionId()] ?: return
         generate(session) {
-            val message = ApiChatMessage("user", content)
+            drainSteering(session)
+            val message = ApiChatMessage("user", content, attachments = attachments)
             session.messages.add(message)
-            if (session.title == "新会话") session.title = content.lineSequence().first().take(40)
+            if (session.title == "新会话") session.title = content.lineSequence().first().take(40).ifBlank { attachments.firstOrNull()?.name?.take(40) ?: "新会话" }
             publishSessions()
             emit(session.id, ChatEvent.MessageAdded(message))
         }
     }
+    fun steer(content: String, attachments: List<com.kernelai.app.data.model.Attachment>, sessionId: String) {
+        if (content.isBlank() && attachments.isEmpty()) return
+        val pending = steering.getOrPut(sessionId) { ArrayDeque() }
+        require(pending.size < 8) { "最多等待 8 条插话" }
+        pending.add(ApiChatMessage("user", content, attachments = attachments))
+        scope.launch { emit(sessionId, ChatEvent.QueueUpdated(pending.toList())) }
+    }
+    fun restoreQueued(sessionId: String, messages: List<ApiChatMessage>) { steering[sessionId] = ArrayDeque(messages.take(8)) }
+    fun resumeQueued(sessionId: String) { sessions[sessionId]?.let { session -> if (!steering[sessionId].isNullOrEmpty()) generate(session) } }
+    fun answer(sessionId: String, text: String): Boolean {
+        if (text.isBlank() || text.length > 64000) return false
+        return answers[sessionId]?.complete(text) == true
+    }
+    private suspend fun drainSteering(session: ChatSession) {
+        val pending = steering[session.id] ?: return
+        while (pending.isNotEmpty()) {
+            val message = pending.removeFirst(); session.messages.add(message)
+            emit(session.id, ChatEvent.MessageAdded(message))
+        }
+        emit(session.id, ChatEvent.QueueUpdated(emptyList()))
+    }
+    private suspend fun askUser(session: ChatSession, call: ApiToolCall, args: JsonObject): String {
+        val question = args["question"]?.jsonPrimitive?.contentOrNull ?: error("缺少 question")
+        require(question.isNotBlank() && question.length <= 2000)
+        val options = args["options"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+        require(options.size <= 8 && options.all { it.length <= 200 })
+        val reply = CompletableDeferred<String>()
+        answers[session.id] = reply
+        try {
+            emit(session.id, ChatEvent.QuestionAsked(com.kernelai.app.data.model.UserQuestion(call.id, question, options)))
+            val answer = reply.await()
+            emit(session.id, ChatEvent.QuestionClosed)
+            return buildJsonObject { put("status", "answered"); put("answer", answer) }.toString()
+        } finally { answers.remove(session.id); reply.cancel() }
+    }
+
     private fun generate(session: ChatSession, before: suspend () -> Unit = {}) {
         val previous = currentJob
         previous?.cancel()
@@ -108,10 +166,14 @@ class AiChatManager(
     }
     fun cancelGeneration() { currentJob?.cancel(); _isGenerating.value = false }
     private suspend fun runToolCallLoop(session: ChatSession) {
-        val tools = toolExecutor.getToolDefinitions()
+        val tools = toolExecutor.getToolDefinitions() + InteractiveTools.askUser
         repeat(MAX_TOOL_CALL_ITERATIONS) { index ->
             currentCoroutineContext().ensureActive()
+            drainSteering(session)
             emit(session.id, ChatEvent.RequestStarted(index + 1))
+            val usage = ContextBudget.estimate(session.messages, tools)
+            emit(session.id, ChatEvent.UsageUpdated(usage))
+            require(usage.promptTokens.toLong() + config.maxTokens <= config.contextWindow) { "估算上下文加输出额度超过模型窗口，请开启新对话、减少附件或调整模型上下文配置" }
             val accumulator = OpenAiClient.StreamAccumulator()
             var failed = false
             try { client.streamChatCompletion(session.messages.toList(), tools).collect { event ->
@@ -119,6 +181,8 @@ class AiChatManager(
                 when (event) {
                     is StreamEvent.ContentDelta -> emit(session.id, ChatEvent.StreamingText(event.delta))
                     is StreamEvent.ToolCallDelta -> emit(session.id, ChatEvent.ToolCallStreaming(event.index, event.functionName, event.argumentsDelta))
+                    is StreamEvent.Usage -> emit(session.id, ChatEvent.UsageUpdated(event.usage))
+                    is StreamEvent.Retrying -> emit(session.id, ChatEvent.Retrying(event.attempt, event.delayMs))
                     is StreamEvent.Error -> { failed = true; emit(session.id, ChatEvent.Error(event.message)) }
                     else -> Unit
                 }
@@ -138,6 +202,7 @@ class AiChatManager(
             session.messages.add(assistant)
             emit(session.id, ChatEvent.MessageAdded(assistant))
             if (calls.isEmpty()) {
+                if (!steering[session.id].isNullOrEmpty()) return@repeat
                 emit(session.id, ChatEvent.GenerationComplete)
                 return
             }
@@ -154,7 +219,8 @@ class AiChatManager(
         val result = try {
             val args = Json.parseToJsonElement(call.function.arguments) as? JsonObject
                 ?: throw IllegalArgumentException("工具参数必须是 JSON 对象")
-            withContext(Dispatchers.IO) { toolExecutor.executeTool(call.function.name, args) }
+            if (call.function.name == "ask_user") askUser(session, call, args)
+            else withContext(Dispatchers.IO) { toolExecutor.executeTool(call.function.name, args) }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -214,6 +280,11 @@ class AiChatManager(
 data class SessionChatEvent(val sessionId: String, val event: ChatEvent)
 
 sealed class ChatEvent {
+    data class QuestionAsked(val question: com.kernelai.app.data.model.UserQuestion) : ChatEvent()
+    data object QuestionClosed : ChatEvent()
+    data class QueueUpdated(val messages: List<ApiChatMessage>) : ChatEvent()
+    data class UsageUpdated(val usage: com.kernelai.app.data.model.ContextUsage) : ChatEvent()
+    data class Retrying(val attempt: Int, val delayMs: Long) : ChatEvent()
 
     /** 新消息已加入历史（用户消息或完成的 assistant 消息）。 */
     data class MessageAdded(val message: ApiChatMessage) : ChatEvent()

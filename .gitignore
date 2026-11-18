@@ -23,3 +23,9 @@ __pycache__/
 **/.cxx/
 local.properties
 *.jks
+
+# Never publish private APK signing material.
+*.p12
+*.jks
+*.keystore
+signing.json

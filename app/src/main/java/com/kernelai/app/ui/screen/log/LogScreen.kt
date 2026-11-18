@@ -17,12 +17,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.VerticalAlignBottom
 import androidx.compose.material.icons.rounded.ClearAll
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import com.kernelai.app.ui.components.FilterChip
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.Surface
+import top.yukonga.miuix.kmp.basic.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -55,10 +55,7 @@ fun LogScreen(
     onClear: () -> Unit = {}
 ) {
     val uiMode = LocalUiMode.current
-    val textColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.onSurface
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.onSurface
-    }
+    val textColor = MiuixTheme.colorScheme.onSurface
 
     var selectedLevels by remember { mutableStateOf(setOf(LogEntry.LogLevel.INFO, LogEntry.LogLevel.WARN, LogEntry.LogLevel.ERROR)) }
     var selectedCategories by remember { mutableStateOf(LogCategory.entries.toSet()) }
@@ -222,10 +219,7 @@ fun LogScreen(
 @Composable
 fun LogEntryRow(entry: LogEntry) {
     val uiMode = LocalUiMode.current
-    val textColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.onSurface
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.onSurface
-    }
+    val textColor = MiuixTheme.colorScheme.onSurface
 
     val levelColor = getLogLevelColor(entry.level)
     val timeFormat = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()) }

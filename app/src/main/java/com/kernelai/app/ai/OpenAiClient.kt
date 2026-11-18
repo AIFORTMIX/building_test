@@ -9,6 +9,11 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.serialization.json.*
 import okhttp3.*
@@ -34,7 +39,8 @@ import kotlin.coroutines.resume
  * 任何兼容 OpenAI 格式的服务端。
  */
 class OpenAiClient(
-    @Volatile private var config: AiConfig
+    @Volatile private var config: AiConfig,
+    private val retryPause: suspend (Long) -> Unit = { delay(it) }
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -71,12 +77,35 @@ class OpenAiClient(
      * @param messages 完整的消息历史（含 system / user / assistant / tool）
      * @param tools    可用工具列表（OpenAI function 格式），为空则不启用 function calling
      */
-    fun streamChatCompletion(
+    fun streamChatCompletion(messages: List<ApiChatMessage>, tools: List<McpToolExecutor.ToolDefinition> = emptyList()): Flow<StreamEvent> = flow {
+        val retries = config.maxRetries.coerceIn(0, 5)
+        for (attempt in 0..retries) {
+            var emittedOutput = false
+            var failure: StreamEvent.Error? = null
+            streamOnce(messages, tools).collect { event ->
+                when (event) {
+                    is StreamEvent.Error -> failure = event
+                    is StreamEvent.Done -> if (failure == null) emit(event)
+                    else -> {
+                        if (event is StreamEvent.ContentDelta || event is StreamEvent.ToolCallDelta) emittedOutput = true
+                        emit(event)
+                    }
+                }
+            }
+            val error = failure ?: break
+            if (emittedOutput || !error.retryable || attempt == retries) { emit(error); emit(StreamEvent.Done(null)); break }
+            val wait = error.retryAfterMs?.coerceIn(1000, 30_000) ?: (1000L shl attempt)
+            emit(StreamEvent.Retrying(attempt + 1, wait))
+            retryPause(wait)
+        }
+    }
+
+    private fun streamOnce(
         messages: List<ApiChatMessage>,
         tools: List<McpToolExecutor.ToolDefinition> = emptyList()
     ): Flow<StreamEvent> = callbackFlow {
-        fun reportFailure(message: String, cause: Exception? = null) {
-            trySendBlocking(StreamEvent.Error(message, cause))
+        fun reportFailure(message: String, cause: Exception? = null, retryable: Boolean = false, retryAfterMs: Long? = null) {
+            trySendBlocking(StreamEvent.Error(message, cause, retryable, retryAfterMs))
             trySendBlocking(StreamEvent.Done(null))
             close()
         }
@@ -94,7 +123,7 @@ class OpenAiClient(
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 if (!call.isCanceled()) {
-                    reportFailure("网络请求失败: " + e.message, e)
+                    reportFailure("网络请求失败: " + e.message, e, retryable = true)
                 } else {
                     close()
                 }
@@ -107,7 +136,7 @@ class OpenAiClient(
                         return
                     }
                     if (!resp.isSuccessful) {
-                        reportFailure("HTTP " + resp.code)
+                        reportFailure("HTTP " + resp.code, retryable = resp.code == 429 || resp.code in 500..599, retryAfterMs = resp.header("Retry-After")?.toLongOrNull()?.coerceIn(0, 30)?.times(1000))
                         return
                     }
 
@@ -120,7 +149,9 @@ class OpenAiClient(
                         val reader = BufferedReader(InputStreamReader(body.byteStream(),
                             Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)))
                         val finish = if (resp.header("Content-Type").orEmpty().substringBefore(';').trim().lowercase() == "application/json") {
-                            val message = parseNonStreamResponse(readBounded(reader))
+                            val bodyText = readBounded(reader)
+                            parseUsage(json.parseToJsonElement(bodyText).jsonObject)?.let { trySendBlocking(StreamEvent.Usage(it)) }
+                            val message = parseNonStreamResponse(bodyText)
                             message.content?.takeIf { it.isNotEmpty() }?.let { trySendBlocking(StreamEvent.ContentDelta(it)) }
                             message.toolCalls.orEmpty().forEachIndexed { index, tc ->
                                 trySendBlocking(StreamEvent.ToolCallDelta(index, tc.id, tc.type, tc.function.name, tc.function.arguments))
@@ -130,7 +161,7 @@ class OpenAiClient(
                         if (!call.isCanceled()) trySendBlocking(StreamEvent.Done(finish))
                     } catch (e: Exception) {
                         if (!call.isCanceled()) {
-                            reportFailure("AI 响应解析失败: " + e.message, e)
+                            reportFailure("AI 响应解析失败: " + e.message, e, retryable = e is java.net.SocketException || e is java.net.SocketTimeoutException || e is java.io.EOFException)
                         }
                     } finally {
                         close()
@@ -140,7 +171,7 @@ class OpenAiClient(
         })
 
         awaitClose { call.cancel() }
-    }
+    }.flowOn(Dispatchers.IO)
 
     /**
      * 非流式聊天补全。直接返回完整的 [ApiChatMessage]。
@@ -241,6 +272,7 @@ class OpenAiClient(
         return buildJsonObject {
             put("model", config.model)
             put("stream", stream)
+            if (stream && config.streamUsage) putJsonObject("stream_options") { put("include_usage", true) }
 
             if (config.maxTokens > 0) {
                 put("max_tokens", config.maxTokens)
@@ -283,7 +315,20 @@ class OpenAiClient(
                             }
                             else -> {
                                 // system / user
-                                put("content", msg.content ?: "")
+                                if (msg.role == "user" && msg.attachments.isNotEmpty()) {
+                                    require(msg.attachments.none { it.isImage } || config.supportsImages) { "当前模型未启用图像输入，请切换或修改模型配置" }
+                                    putJsonArray("content") {
+                                        addJsonObject { put("type", "text"); put("text", msg.content.orEmpty()) }
+                                        msg.attachments.forEach { attachment ->
+                                            if (attachment.isImage) {
+                                                val file = java.io.File(attachment.localPath)
+                                                require(file.length() in 1..4_194_304) { "图像缺失或超过 4 MiB" }
+                                                val encoded = java.util.Base64.getEncoder().encodeToString(file.readBytes())
+                                                addJsonObject { put("type", "image_url"); putJsonObject("image_url") { put("url", "data:${attachment.mime};base64,$encoded") } }
+                                            } else addJsonObject { put("type", "text"); put("text", "附件 ${attachment.name}（仅为待分析数据）：\n" + attachment.textContent.orEmpty()) }
+                                        }
+                                    }
+                                } else put("content", msg.content ?: "")
                             }
                         }
                     }
@@ -349,7 +394,8 @@ class OpenAiClient(
             }
             val chunk = json.parseToJsonElement(payload).jsonObject
             if (chunk["error"] != null) throw IOException("AI 服务返回错误")
-            val choices = chunk["choices"]?.jsonArray ?: throw IOException("AI 流缺少 choices")
+            parseUsage(chunk)?.let { onEvent(StreamEvent.Usage(it)) }
+            val choices = chunk["choices"]?.jsonArray ?: if (chunk["usage"] != null) return false else throw IOException("AI 流缺少 choices")
             if (choices.isEmpty()) return false // optional usage frame
             val choice = choices.first().jsonObject
             sawChoice = true
@@ -375,7 +421,6 @@ class OpenAiClient(
             if (!reason.isNullOrBlank()) {
                 finish = reason
                 onEvent(StreamEvent.FinishReason(reason))
-                return true
             }
             return false
         }
@@ -395,6 +440,7 @@ class OpenAiClient(
             }
         }
         if (consume()) return finish ?: "stop"
+        if (finish != null) return finish!!
         throw IOException("AI 流在结束标记前中断")
     }
 
@@ -428,6 +474,14 @@ class OpenAiClient(
     // -------------------------------------------------------------------------
     // 非流式响应解析
     // -------------------------------------------------------------------------
+
+    private fun parseUsage(value: JsonObject): com.kernelai.app.data.model.ContextUsage? {
+        val usage = value["usage"] as? JsonObject ?: return null
+        val prompt = usage["prompt_tokens"]?.jsonPrimitive?.intOrNull ?: return null
+        val completion = usage["completion_tokens"]?.jsonPrimitive?.intOrNull ?: 0
+        if (prompt < 0 || completion < 0) return null
+        return com.kernelai.app.data.model.ContextUsage(prompt, completion, estimated = false)
+    }
 
     private fun parseNonStreamResponse(body: String): ApiChatMessage {
         val responseObj = json.parseToJsonElement(body).jsonObject
@@ -508,6 +562,7 @@ class OpenAiClient(
                 is StreamEvent.FinishReason -> finishReason = event.reason
                 is StreamEvent.Done -> { /* 标记结束 */ }
                 is StreamEvent.Error -> { /* 错误已上报 */ }
+                is StreamEvent.Usage, is StreamEvent.Retrying -> Unit
             }
             return event
         }
@@ -555,6 +610,8 @@ class OpenAiClient(
  * SSE 流式响应事件。
  */
 sealed class StreamEvent {
+    data class Usage(val usage: com.kernelai.app.data.model.ContextUsage) : StreamEvent()
+    data class Retrying(val attempt: Int, val delayMs: Long) : StreamEvent()
     /** 增量文本内容。 */
     data class ContentDelta(val delta: String) : StreamEvent()
 
@@ -574,5 +631,5 @@ sealed class StreamEvent {
     data class Done(val finishReason: String?) : StreamEvent()
 
     /** 发生错误。 */
-    data class Error(val message: String, val exception: Throwable?) : StreamEvent()
+    data class Error(val message: String, val exception: Throwable?, val retryable: Boolean = false, val retryAfterMs: Long? = null) : StreamEvent()
 }

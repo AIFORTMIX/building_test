@@ -83,7 +83,7 @@ object KernelAiThemeController {
 }
 
 /**
- * 轻微 MCP 统一主题入口 - 根据 UiMode 分发到 Miuix 或 Material3 主题
+ * 轻微 MCP 统一主题入口 - 统一使用 Miuix 主题
  */
 @Composable
 fun KernelAiTheme(
@@ -94,10 +94,7 @@ fun KernelAiTheme(
     val context = LocalContext.current
     val currentAppSettings = appSettings ?: KernelAiThemeController.getAppSettings(context)
 
-    when (uiMode) {
-        UiMode.Miuix -> MiuixKernelAiTheme(currentAppSettings, content)
-        UiMode.Material -> MaterialKernelAiTheme(currentAppSettings, content)
-    }
+    MiuixKernelAiTheme(currentAppSettings, content)
 }
 
 /**
@@ -138,54 +135,11 @@ fun MiuixKernelAiTheme(
             }
             CompositionLocalProvider(
                 LocalContentColor provides MiuixTheme.colorScheme.onBackground,
+                LocalColorMode provides if (darkTheme) 2 else 1,
             ) {
                 content()
             }
         }
-    )
-}
-
-/**
- * Material3 风格主题
- */
-@Composable
-fun MaterialKernelAiTheme(
-    appSettings: KernelAiAppSettings,
-    content: @Composable () -> Unit
-) {
-    val context = LocalContext.current
-    val systemDarkTheme = isSystemInDarkTheme()
-    val darkTheme = appSettings.colorMode.isDark || (appSettings.colorMode.isSystem && systemDarkTheme)
-
-    val colorScheme = if (appSettings.keyColor == 0) {
-        when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && darkTheme ->
-                androidx.compose.material3.dynamicDarkColorScheme(context)
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
-                androidx.compose.material3.dynamicLightColorScheme(context)
-            darkTheme -> androidx.compose.material3.darkColorScheme()
-            else -> androidx.compose.material3.lightColorScheme()
-        }
-    } else {
-        com.materialkolor.rememberDynamicColorScheme(
-            seedColor = Color(appSettings.keyColor),
-            isDark = darkTheme,
-            isAmoled = false,
-            style = com.materialkolor.PaletteStyle.TonalSpot,
-        )
-    }
-
-    LaunchedEffect(darkTheme) {
-        val window = (context as? Activity)?.window ?: return@LaunchedEffect
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            isAppearanceLightStatusBars = !darkTheme
-            isAppearanceLightNavigationBars = !darkTheme
-        }
-    }
-
-    androidx.compose.material3.MaterialExpressiveTheme(
-        colorScheme = colorScheme,
-        content = content
     )
 }
 

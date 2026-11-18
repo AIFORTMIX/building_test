@@ -3,9 +3,11 @@
 本仓库用于通过 GitHub Actions 编译 Qingwei ARM64 内核模块，并检查生成模块
 是否匹配所提供手机镜像的导出符号 CRC 和完整 kernel release。
 
-2026-11-18 验证通过：[驱动构建](https://github.com/AIFORTMIX/building_test/actions/runs/44245345141)完整 release 和 62 项版本符号 CRC 匹配；[App 构建与联调](https://github.com/AIFORTMIX/building_test/actions/runs/44249554219)通过 33 项单元测试及 5 项 Android 模拟器检查。两次运行的 Artifacts 提供 KO、APK、校验报告和截图。尚未进行实体手机或真实 AI 服务测试。
+0.2.0 将 App 统一为 Miuix，加入本地会话、多供应商与模型配置、图像/文本附件、五次有界重试、可交互工具记录及产物卡片。进程、断点、内存界面使用真实驱动调用；内置 MCP 宿主可按开关允许外部客户端，并记录调用。使用和限制见 [Agent App 说明](docs/AGENT_APP.md)。
 
-App 已加入本仓库。推送 App 改动后，[App 构建和模拟联调](https://github.com/AIFORTMIX/building_test/actions/workflows/build-app.yml) 自动编译 APK 并运行模拟 AI → MCP → 测试设备链路及 Android 界面检查。无需真实 AI 密钥或手机。Markdown、会话加载和可展开执行详情的行为及当前限制见 [App 验证说明](docs/APP_VALIDATION.md)。
+驱动此前已在 [构建 44245345141](https://github.com/AIFORTMIX/building_test/actions/runs/44245345141) 通过完整 release 和 62 项版本符号 CRC 匹配。本次保持 KO、JNI 与 ioctl ABI 不变，无需重编译 KO。用户已反馈手机驱动与 AI/MCP 可连接；0.2.0 新功能仍需真机验收。
+
+[App 工作流](https://github.com/AIFORTMIX/building_test/actions/workflows/build-app.yml) 自动执行构建和模拟 AI → MCP → 设备边界联调、Android UI/JNI 检查。正式安装只需 Artifact 中的固定签名 `qingwei.apk`，不需要安装测试 APK 或另一个 MCP 宿主。历史验证说明见 [App 验证记录](docs/APP_VALIDATION.md)。
 
 ## 运行编译
 

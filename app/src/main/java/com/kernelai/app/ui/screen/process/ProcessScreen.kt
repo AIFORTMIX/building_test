@@ -26,13 +26,13 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import com.kernelai.app.ui.components.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.Surface
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.PullToRefresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -58,6 +58,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun ProcessScreen(
     viewModel: ProcessViewModel = viewModel()
 ) {
+    val status by viewModel.status.collectAsStateWithLifecycle()
     val filteredProcesses by viewModel.filteredProcesses.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -65,17 +66,18 @@ fun ProcessScreen(
     val processDetails by viewModel.processDetails.collectAsStateWithLifecycle()
 
     val uiMode = LocalUiMode.current
-    val surfaceColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.surface
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.surface
-    }
+    val surfaceColor = MiuixTheme.colorScheme.surface
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(top = 8.dp)
     ) {
-        Text("演示数据", modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("进程", fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            IconButton(onClick = viewModel::refresh, enabled = !isLoading) { Icon(Icons.Rounded.Refresh, "刷新进程") }
+        }
+        Text(status, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
         // 搜索栏
         ProcessSearchBar(
             query = searchQuery,
@@ -84,7 +86,7 @@ fun ProcessScreen(
         )
 
         // 进程列表
-        PullToRefreshBox(
+        PullToRefresh(
             isRefreshing = isLoading,
             onRefresh = { viewModel.refresh() },
             modifier = Modifier.fillMaxSize()
@@ -133,14 +135,8 @@ fun ProcessSearchBar(
     onClear: () -> Unit
 ) {
     val uiMode = LocalUiMode.current
-    val bgColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant
-    }
-    val textColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.onSurface
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.onSurface
-    }
+    val bgColor = MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    val textColor = MiuixTheme.colorScheme.onSurface
 
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -203,14 +199,8 @@ fun ProcessItem(
     onClick: () -> Unit
 ) {
     val uiMode = LocalUiMode.current
-    val cardColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-    }
-    val textColor = when (uiMode) {
-        UiMode.Miuix -> MiuixTheme.colorScheme.onSurface
-        UiMode.Material -> androidx.compose.material3.MaterialTheme.colorScheme.onSurface
-    }
+    val cardColor = MiuixTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+    val textColor = MiuixTheme.colorScheme.onSurface
 
     Surface(
         shape = RoundedCornerShape(12.dp),

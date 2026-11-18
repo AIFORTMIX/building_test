@@ -35,14 +35,6 @@ import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.ListAlt
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationDrawerItem
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.PermanentDrawerSheet
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
@@ -76,6 +68,9 @@ import com.kernelai.app.ui.screen.disasm.DisasmScreen
 import com.kernelai.app.ui.screen.log.LogScreen
 import com.kernelai.app.ui.screen.memory.MemoryScreen
 import com.kernelai.app.ui.screen.process.ProcessScreen
+import com.kernelai.app.ui.screen.settings.McpAuditScreen
+import com.kernelai.app.ui.screen.settings.ModelsScreen
+import com.kernelai.app.ui.viewmodel.ModelsViewModel
 import com.kernelai.app.ui.screen.settings.SettingsScreen
 import com.kernelai.app.ui.theme.KernelAiTheme
 import com.kernelai.app.ui.theme.KernelAiThemeController
@@ -90,7 +85,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * 轻微 MCP 主 Activity - 基于 KernelSU-Style-UI-Kit 模板结构
- * 支持 Miuix/Material 双主题、底部导航 + 侧边导航
+ * 使用 Miuix 主题、菜单与自适应导航
  */
 class MainActivity : ComponentActivity() {
 
@@ -98,17 +93,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setContent {
+            val modelsViewModel = viewModel<ModelsViewModel>()
             val driverViewModel = viewModel<DriverViewModel>()
             val connectionStatus by driverViewModel.connectionStatus.collectAsStateWithLifecycle()
             val appSettings by driverViewModel.appSettings.collectAsStateWithLifecycle()
             val logEntries by driverViewModel.logEntries.collectAsStateWithLifecycle()
 
-            val uiMode = appSettings.uiStyle.let {
-                when (it) {
-                    com.kernelai.app.data.model.UiStyle.MIUIX -> UiMode.Miuix
-                    com.kernelai.app.data.model.UiStyle.MATERIAL -> UiMode.Material
-                }
-            }
+            val uiMode = UiMode.Miuix
 
             val darkMode = when (appSettings.themeMode) {
                 com.kernelai.app.data.model.ThemeMode.DARK -> true
@@ -158,7 +149,7 @@ class MainActivity : ComponentActivity() {
                             connectionStatus = connectionStatus,
                             appSettings = appSettings,
                             logEntries = logEntries,
-                            driverViewModel = driverViewModel,
+                            driverViewModel = driverViewModel, modelsViewModel = modelsViewModel,
                         )
                     }
 
@@ -171,6 +162,8 @@ class MainActivity : ComponentActivity() {
                             ),
                             onBack = { navigator.pop() },
                             entryProvider = entryProvider {
+                                entry<Route.McpAudit> { McpAuditScreen { navigator.pop() } }
+                                entry<Route.Models> { ModelsScreen(modelsViewModel) { navigator.pop() } }
                                 entry<Route.Main> { mainScreenEntry() }
                                 entry<Route.Chat> { mainScreenEntry() }
                                 entry<Route.Settings> { mainScreenEntry() }
@@ -188,14 +181,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    when (uiMode) {
-                        UiMode.Material -> androidx.compose.material3.Scaffold(
-                            contentWindowInsets = WindowInsets(0, 0, 0, 0)
-                        ) { padding ->
-                            Box(Modifier.padding(padding)) { navDisplay() }
-                        }
-                        UiMode.Miuix -> Scaffold { navDisplay() }
-                    }
+                    Scaffold { navDisplay() }
                 }
             }
         }
@@ -255,9 +241,11 @@ private fun MainScreen(
     appSettings: com.kernelai.app.data.model.AppSettings,
     logEntries: List<DriverViewModel.LogEntry>,
     driverViewModel: DriverViewModel,
+    modelsViewModel: ModelsViewModel,
 ) {
     val navigator = LocalAppNavigator.current
     val uiMode = LocalUiMode.current
+    val modelState by modelsViewModel.state.collectAsStateWithLifecycle()
     val selectedPage = pagerState.currentPage
     val scope = rememberCoroutineScope()
     fun selectPage(index: Int) {
@@ -273,16 +261,20 @@ private fun MainScreen(
             beyondViewportPageCount = 1,
         ) { page ->
             when (page) {
-                MainPagerConfig.PAGE_CHAT -> ChatScreen(connectionStatus = connectionStatus, aiConfig = appSettings.aiConfig)
+                MainPagerConfig.PAGE_CHAT -> ChatScreen(connectionStatus = connectionStatus, aiConfig = appSettings.aiConfig,
+                    modelCatalog = modelState.catalog, requireModel = true, onManageModels = { navigator.push(Route.Models) },
+                    onOpenPage = ::selectPage, onOpenUtility = { name ->
+                        SideNavDestination.entries.firstOrNull { it.label == name }?.let { navigator.push(it.route) }
+                    })
                 MainPagerConfig.PAGE_PROCESS -> ProcessScreen()
                 MainPagerConfig.PAGE_BREAKPOINT -> BreakpointScreen()
                 MainPagerConfig.PAGE_SETTINGS -> SettingsScreen(
                     scrollState = settingsScrollState,
                     connectionStatus = connectionStatus,
                     appSettings = appSettings,
-                    onAiConfigChange = driverViewModel::updateAiConfig,
+                    onManageModels = { navigator.push(Route.Models) },
+                    onOpenAudit = { navigator.push(Route.McpAudit) },
                     onThemeModeChange = { driverViewModel.updateThemeMode(it) },
-                    onUiStyleChange = { driverViewModel.updateUiStyle(it) },
                     onReconnectDriver = { driverViewModel.reconnectDriver() },
                     onToggleMcp = { driverViewModel.toggleMcpServer() },
                 )
@@ -291,113 +283,26 @@ private fun MainScreen(
     }
 
     if (isLandscape) {
-        // 横屏：侧边导航栏
-        Row(modifier = Modifier.fillMaxSize()) {
-            when (uiMode) {
-                UiMode.Material -> {
-                    NavigationRail {
-                        BottomNavDestination.entries.forEachIndexed { index, dest ->
-                            NavigationRailItem(
-                                selected = selectedPage == index,
-                                onClick = { selectPage(index) },
-                                icon = { Icon(dest.icon, contentDescription = dest.label) },
-                                label = { Text(dest.label, fontSize = 11.sp) }
-                            )
-                        }
-                        // 侧边导航项
-                        SideNavDestination.entries.forEach { dest ->
-                            NavigationRailItem(
-                                selected = false,
-                                onClick = { navigator.push(dest.route) },
-                                icon = { Icon(dest.icon, contentDescription = dest.label) },
-                                label = { Text(dest.label, fontSize = 11.sp) }
-                            )
-                        }
-                    }
+        Row(Modifier.fillMaxSize()) {
+            Column(Modifier.padding(8.dp)) {
+                BottomNavDestination.entries.forEachIndexed { index, dest ->
+                    top.yukonga.miuix.kmp.basic.Text(dest.label, Modifier.clickable { selectPage(index) }.padding(12.dp),
+                        color = if (selectedPage == index) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackground)
                 }
-                UiMode.Miuix -> {
-                    // Miuix 侧边导航
-                    Column(
-                        modifier = Modifier.padding(8.dp)
-                    ) {
-                        BottomNavDestination.entries.forEachIndexed { index, dest ->
-                            top.yukonga.miuix.kmp.basic.Text(
-                                text = dest.label,
-                                modifier = Modifier.clickable { selectPage(index) }.padding(8.dp)
-                            )
-                        }
-                        SideNavDestination.entries.forEach { dest ->
-                            top.yukonga.miuix.kmp.basic.Text(
-                                text = dest.label,
-                                modifier = Modifier.clickable { navigator.push(dest.route) }.padding(8.dp)
-                            )
-                        }
-                    }
+                SideNavDestination.entries.forEach { dest ->
+                    top.yukonga.miuix.kmp.basic.Text(dest.label, Modifier.clickable { navigator.push(dest.route) }.padding(12.dp))
                 }
             }
-
-            Box(modifier = Modifier.weight(1f)) {
-                pagerContent()
-            }
+            Box(Modifier.weight(1f)) { pagerContent() }
         }
     } else {
-        // 竖屏：底部导航栏
-        val bottomBar = @Composable {
-            Box(modifier = Modifier.fillMaxWidth()) {
-                when (uiMode) {
-                    UiMode.Material -> {
-                        NavigationBar {
-                            BottomNavDestination.entries.forEachIndexed { index, dest ->
-                                NavigationBarItem(
-                                    selected = selectedPage == index,
-                                    onClick = { selectPage(index) },
-                                    icon = { Icon(dest.icon, contentDescription = dest.label) },
-                                    label = { Text(dest.label, fontSize = 11.sp) }
-                                )
-                            }
-                        }
-                    }
-                    UiMode.Miuix -> {
-                        val items = BottomNavDestination.entries.map { dest ->
-                            NavigationItem(
-                                label = dest.label,
-                                icon = dest.icon,
-                            )
-                        }
-                        MiuixNavigationBar(
-                            color = MiuixTheme.colorScheme.surface,
-                            content = {
-                                items.forEachIndexed { index, item ->
-                                    MiuixNavigationBarItem(
-                                        modifier = Modifier.weight(1f),
-                                        icon = item.icon,
-                                        label = item.label,
-                                        selected = selectedPage == index,
-                                        onClick = { selectPage(index) }
-                                    )
-                                }
-                            }
-                        )
-                    }
+        Scaffold(bottomBar = {
+            if (selectedPage != MainPagerConfig.PAGE_CHAT) MiuixNavigationBar(color = MiuixTheme.colorScheme.surface) {
+                BottomNavDestination.entries.forEachIndexed { index, dest ->
+                    MiuixNavigationBarItem(modifier = Modifier.weight(1f), icon = dest.icon, label = dest.label,
+                        selected = selectedPage == index, onClick = { selectPage(index) })
                 }
             }
-        }
-
-        when (uiMode) {
-            UiMode.Material -> androidx.compose.material3.Scaffold(
-                bottomBar = bottomBar
-            ) { innerPadding ->
-                Box(modifier = Modifier.padding(innerPadding)) {
-                    pagerContent()
-                }
-            }
-            UiMode.Miuix -> Scaffold(
-                bottomBar = bottomBar
-            ) { innerPadding ->
-                Box(modifier = Modifier.padding(innerPadding)) {
-                    pagerContent()
-                }
-            }
-        }
+        }) { innerPadding -> Box(Modifier.padding(innerPadding)) { pagerContent() } }
     }
 }

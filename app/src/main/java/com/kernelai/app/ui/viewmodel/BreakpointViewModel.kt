@@ -2,177 +2,60 @@ package com.kernelai.app.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.kernelai.app.KernelAiApplication
 import com.kernelai.app.data.model.BreakpointInfo
 import com.kernelai.app.data.model.BreakpointInfo.BreakpointType
-import kotlinx.coroutines.delay
+import com.kernelai.app.mcp.McpToolExecutor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.*
 
-/**
- * 断点管理器 ViewModel - 管理断点列表、添加/删除断点、监控命中计数
- */
-class BreakpointViewModel : ViewModel() {
-
-    private val _breakpoints = MutableStateFlow<List<BreakpointInfo>>(emptyList())
-    val breakpoints: StateFlow<List<BreakpointInfo>> = _breakpoints.asStateFlow()
-
-    private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-
-    private val _selectedBreakpoint = MutableStateFlow<BreakpointInfo?>(null)
-    val selectedBreakpoint: StateFlow<BreakpointInfo?> = _selectedBreakpoint.asStateFlow()
-
-    private val _registerSnapshot = MutableStateFlow<RegisterSnapshot?>(null)
-    val registerSnapshot: StateFlow<RegisterSnapshot?> = _registerSnapshot.asStateFlow()
-
-    private val _showAddDialog = MutableStateFlow(false)
-    val showAddDialog: StateFlow<Boolean> = _showAddDialog.asStateFlow()
-
-    init {
-        loadBreakpoints()
+class BreakpointViewModel(private val tools: McpToolExecutor = KernelAiApplication.instance.aiToolExecutor) : ViewModel() {
+    private val _breakpoints = MutableStateFlow<List<BreakpointInfo>>(emptyList()); val breakpoints = _breakpoints.asStateFlow()
+    private val _isLoading = MutableStateFlow(false); val isLoading = _isLoading.asStateFlow()
+    private val _selectedBreakpoint = MutableStateFlow<BreakpointInfo?>(null); val selectedBreakpoint = _selectedBreakpoint.asStateFlow()
+    private val _registerSnapshot = MutableStateFlow<RegisterSnapshot?>(null); val registerSnapshot = _registerSnapshot.asStateFlow()
+    private val _showAddDialog = MutableStateFlow(false); val showAddDialog = _showAddDialog.asStateFlow()
+    private val _status = MutableStateFlow("点击刷新读取驱动硬件断点，列表不含软件断点"); val status = _status.asStateFlow()
+    private suspend fun call(name: String, args: JsonObject) = Json.parseToJsonElement(tools.executeTool(name, args)).jsonObject
+    private suspend fun refreshList() {
+        val result = call("breakpoint_list", JsonObject(emptyMap()))
+        _breakpoints.value = result["breakpoints"]!!.jsonArray.map { it.jsonObject.let { b ->
+            BreakpointInfo(b["bp_index"]!!.jsonPrimitive.int, b["address"]!!.jsonPrimitive.content.removePrefix("0x").toULong(16).toLong(),
+                BreakpointType.fromValue(b["type"]!!.jsonPrimitive.int), b["length"]!!.jsonPrimitive.int, b["hit_count"]!!.jsonPrimitive.long, b["active"]!!.jsonPrimitive.boolean)
+        } }
+        _status.value = "驱动硬件断点：${_breakpoints.value.size} 个；列表为全局范围"
     }
-
-    /**
-     * 加载断点列表
-     */
-    fun loadBreakpoints() {
-        viewModelScope.launch {
-            _isLoading.value = true
-            try {
-                delay(200) // 模拟加载延迟
-                // 实际项目中从驱动 CMD_HWBP_LIST / CMD_SWBP_LIST 获取
-                _breakpoints.value = listOf(
-                    BreakpointInfo(
-                        bpIndex = 0,
-                        address = 0x7F40001234L,
-                        type = BreakpointType.HW_EXECUTE,
-                        length = 4,
-                        hitCount = 15,
-                        isActive = true
-                    ),
-                    BreakpointInfo(
-                        bpIndex = 1,
-                        address = 0x7F20000100L,
-                        type = BreakpointType.HW_WRITE,
-                        length = 8,
-                        hitCount = 3,
-                        isActive = true
-                    ),
-                    BreakpointInfo(
-                        bpIndex = 2,
-                        address = 0x7F10005678L,
-                        type = BreakpointType.SW,
-                        length = 4,
-                        hitCount = 0,
-                        isActive = false
-                    )
-                )
-            } finally {
-                _isLoading.value = false
-            }
-        }
+    private fun operation(block: suspend () -> Unit) {
+        if (_isLoading.value) return
+        _isLoading.value = true
+        viewModelScope.launch { try { block() } catch (e: Exception) { if (e is CancellationException) throw e; _status.value = "操作失败：${e.message}" } finally { _isLoading.value = false } }
     }
-
-    /**
-     * 显示添加断点对话框
-     */
-    fun showAddDialog() {
-        _showAddDialog.value = true
+    fun loadBreakpoints() = operation { refreshList() }
+    fun showAddDialog() { _showAddDialog.value = true }
+    fun hideAddDialog() { _showAddDialog.value = false }
+    fun addBreakpoint(address: Long, type: BreakpointType, pid: Int, length: Int = 4) = operation {
+        require(pid > 0 && address != 0L) { "请输入有效 PID 和地址" }
+        val name = when (type) { BreakpointType.HW_EXECUTE -> "hw_execute"; BreakpointType.HW_READ -> "hw_read"; BreakpointType.HW_WRITE -> "hw_write"; BreakpointType.HW_ACCESS -> "hw_access"; BreakpointType.SW -> "sw" }
+        call("breakpoint_set", buildJsonObject { put("pid", pid); put("address", "0x" + address.toULong().toString(16)); put("type", name); put("length", length) })
+        _showAddDialog.value = false; refreshList()
     }
-
-    /**
-     * 隐藏添加断点对话框
-     */
-    fun hideAddDialog() {
-        _showAddDialog.value = false
+    fun removeBreakpoint(breakpoint: BreakpointInfo) = operation {
+        call("breakpoint_remove", buildJsonObject { put("bp_id", breakpoint.bpIndex); put("type", if (breakpoint.type == BreakpointType.SW) "sw" else "hw") })
+        clearSelection(); refreshList()
     }
-
-    /**
-     * 添加断点
-     */
-    fun addBreakpoint(address: Long, type: BreakpointType, pid: Int, length: Int = 4) {
-        viewModelScope.launch {
-            val newBp = BreakpointInfo(
-                bpIndex = (_breakpoints.value.maxOfOrNull { it.bpIndex } ?: -1) + 1,
-                address = address,
-                type = type,
-                length = length,
-                hitCount = 0,
-                isActive = true
-            )
-            _breakpoints.value = _breakpoints.value + newBp
-            _showAddDialog.value = false
-        }
+    fun toggleBreakpoint(breakpoint: BreakpointInfo) { _status.value = "驱动不提供原位启停接口，请删除后重新设置断点" }
+    fun selectBreakpoint(breakpoint: BreakpointInfo) = operation {
+        _selectedBreakpoint.value = breakpoint; _registerSnapshot.value = null
+        val result = call("register_read", buildJsonObject { put("bp_id", breakpoint.bpIndex) })
+        if (result["valid"]?.jsonPrimitive?.boolean != true) { _status.value = "断点尚无有效寄存器快照"; return@operation }
+        val registers = result["registers"]!!.jsonObject
+        fun value(name: String) = registers[name]!!.jsonPrimitive.content.removePrefix("0x").toULong(16).toLong()
+        _registerSnapshot.value = RegisterSnapshot(x0 = value("x0"), x1 = value("x1"), x2 = value("x2"), x3 = value("x3"), x4 = value("x4"), x5 = value("x5"), x6 = value("x6"), x7 = value("x7"), x8 = value("x8"), x9 = value("x9"), x10 = value("x10"), x11 = value("x11"), x12 = value("x12"), x13 = value("x13"), x14 = value("x14"), x15 = value("x15"), x16 = value("x16"), x17 = value("x17"), x18 = value("x18"), x19 = value("x19"), x20 = value("x20"), x21 = value("x21"), x22 = value("x22"), x23 = value("x23"), x24 = value("x24"), x25 = value("x25"), x26 = value("x26"), x27 = value("x27"), x28 = value("x28"), x29 = value("x29"), x30 = value("x30"), sp = value("sp"), pc = value("pc"), pstate = value("pstate"))
     }
-
-    /**
-     * 删除断点
-     */
-    fun removeBreakpoint(breakpoint: BreakpointInfo) {
-        viewModelScope.launch {
-            _breakpoints.value = _breakpoints.value.filter { it.bpIndex != breakpoint.bpIndex }
-        }
-    }
-
-    /**
-     * 切换断点激活状态
-     */
-    fun toggleBreakpoint(breakpoint: BreakpointInfo) {
-        viewModelScope.launch {
-            _breakpoints.value = _breakpoints.value.map { bp ->
-                if (bp.bpIndex == breakpoint.bpIndex) {
-                    bp.copy(isActive = !bp.isActive)
-                } else {
-                    bp
-                }
-            }
-        }
-    }
-
-    /**
-     * 选择断点并查看寄存器快照
-     */
-    fun selectBreakpoint(breakpoint: BreakpointInfo) {
-        _selectedBreakpoint.value = breakpoint
-        loadRegisterSnapshot(breakpoint.bpIndex)
-    }
-
-    /**
-     * 加载寄存器快照
-     */
-    private fun loadRegisterSnapshot(bpIndex: Int) {
-        viewModelScope.launch {
-            delay(100) // 模拟从驱动 CMD_QUERY_SNAPSHOT 获取
-            _registerSnapshot.value = RegisterSnapshot(
-                x0 = 0x0L, x1 = 0x1L, x2 = 0x2L, x3 = 0x3L,
-                x4 = 0x4L, x5 = 0x5L, x6 = 0x6L, x7 = 0x7L,
-                x8 = 0x8L, x9 = 0x9L, x10 = 0xAL, x11 = 0xBL,
-                x12 = 0xCL, x13 = 0xDL, x14 = 0xEL, x15 = 0xFL,
-                x16 = 0x10L, x17 = 0x11L, x18 = 0x12L, x19 = 0x13L,
-                x20 = 0x14L, x21 = 0x15L, x22 = 0x16L, x23 = 0x17L,
-                x24 = 0x18L, x25 = 0x19L, x26 = 0x1AL, x27 = 0x1BL,
-                x28 = 0x1CL, x29 = 0x7FCE000FF0L, // FP
-                x30 = 0x7F40001300L, // LR
-                sp = 0x7FCE000000L,
-                pc = 0x7F40001234L,
-                pstate = 0x60000000L
-            )
-        }
-    }
-
-    /**
-     * 清除选择
-     */
-    fun clearSelection() {
-        _selectedBreakpoint.value = null
-        _registerSnapshot.value = null
-    }
-
-    /**
-     * ARM64 寄存器快照
-     */
+    fun clearSelection() { _selectedBreakpoint.value = null; _registerSnapshot.value = null }
     data class RegisterSnapshot(
         val x0: Long, val x1: Long, val x2: Long, val x3: Long,
         val x4: Long, val x5: Long, val x6: Long, val x7: Long,

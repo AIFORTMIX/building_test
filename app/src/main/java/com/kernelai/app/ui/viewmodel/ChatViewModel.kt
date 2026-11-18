@@ -8,6 +8,9 @@ import com.kernelai.app.ai.ChatEvent
 import com.kernelai.app.ai.OpenAiClient
 import com.kernelai.app.ai.AiConfig as ClientConfig
 import com.kernelai.app.data.model.*
+import com.kernelai.app.data.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import com.kernelai.app.mcp.McpToolExecutor
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -21,11 +24,19 @@ data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val inputText: String = "",
     val isStreaming: Boolean = false,
-    val hasOlderMessages: Boolean = false
+    val hasOlderMessages: Boolean = false,
+    val loading: Boolean = false,
+    val attachments: List<Attachment> = emptyList(),
+    val usage: ContextUsage? = null,
+    val error: String? = null,
+    val modelName: String = "",
+    val contextWindow: Int = 32768,
+    val question: UserQuestion? = null, val queued: List<ApiChatMessage> = emptyList()
 )
 
 class ChatViewModel(
     private val tools: McpToolExecutor = KernelAiApplication.instance.aiToolExecutor,
+    private val storage: ChatStore? = runCatching { KernelAiApplication.instance.chatStore }.getOrNull(),
     private val connectionChanged: (Boolean) -> Unit = KernelAiApplication.instance::setAiConnected
 ) : ViewModel() {
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -42,7 +53,11 @@ class ChatViewModel(
         var input: String = "",
         var assistantId: String? = null,
         var streaming: Boolean = false,
-        var visibleCount: Int = 80
+        var visibleCount: Int = 80,
+        var attachments: List<Attachment> = emptyList(),
+        var providerId: String = "", var modelId: String = "",
+        var usage: ContextUsage? = null,
+        var question: UserQuestion? = null, var queued: List<ApiChatMessage> = emptyList()
     )
     private val cache = mutableMapOf<String, SessionUi>()
     private var activeId = ""
@@ -51,8 +66,40 @@ class ChatViewModel(
     private val _sessions = MutableStateFlow<List<AiChatManager.SessionInfo>>(emptyList())
     val sessions = _sessions.asStateFlow()
     private var sessionCollector: Job? = null
-    init { ensureManager() }
-    private fun clientConfig() = ClientConfig(config.baseUrl, config.apiKey, config.model, config.maxTokens, config.temperature.toFloat())
+    private var loading = storage != null
+    private var storageHealthy = true
+    private var error: String? = null
+    private var catalog = ProviderCatalog()
+    private var saveJob: Job? = null
+    private var saveDirty = false
+    private var requireCatalog = false
+    init {
+        ensureManager()
+        if (storage != null) viewModelScope.launch {
+            try {
+                val archive = storage.load()
+                if (archive.sessions.isNotEmpty()) {
+                    manager?.deleteSession(activeId); cache.clear()
+                    archive.sessions.forEach { saved ->
+                        val partial = saved.messages.lastOrNull { it.role == MessageRole.ASSISTANT && it.isStreaming && it.phase != AssistantPhase.THINKING }?.content
+                        manager?.restoreSession(saved.id, saved.title, saved.createdAt, saved.history, partial)
+                        manager?.restoreQueued(saved.id, saved.queued)
+                        cache[saved.id] = SessionUi(messages = saved.messages.map { message ->
+                            message.copy(isStreaming = false, phase = if (message.isStreaming) AssistantPhase.CANCELLED else message.phase,
+                                toolCalls = message.toolCalls?.map { call -> if (call.status in listOf(ToolCallStatus.RUNNING, ToolCallStatus.PENDING)) call.copy(status = ToolCallStatus.CANCELLED) else call })
+                        }, input = saved.draft, attachments = saved.attachments, providerId = saved.providerId, modelId = saved.modelId, usage = saved.usage, queued = saved.queued)
+                    }
+                    activeId = archive.activeId.takeIf { it in cache } ?: cache.keys.first()
+                    manager?.switchSession(activeId)
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                storageHealthy = false; error = "本地会话读取失败，原文件保留：${e.message}"
+            } finally { loading = false; applySessionConfig(); publish() }
+        }
+    }
+    private fun clientConfig() = ClientConfig(config.baseUrl, config.apiKey, config.model, config.maxTokens, config.temperature.toFloat(),
+        contextWindow = config.contextWindow, supportsImages = config.supportsImages, maxRetries = config.maxRetries, streamUsage = config.streamUsage)
     private fun ensureManager(): AiChatManager {
         manager?.let { return it }
         val next = AiChatManager(OpenAiClient(clientConfig()), tools, clientConfig())
@@ -79,40 +126,110 @@ class ChatViewModel(
         _inputText.value = state.input
         _isStreaming.value = state.streaming
         _uiState.value = ChatUiState(activeId, state.messages.takeLast(state.visibleCount), state.input,
-            state.streaming, state.messages.size > state.visibleCount)
+            state.streaming, state.messages.size > state.visibleCount, loading, state.attachments, state.usage, error, config.model, config.contextWindow, state.question, state.queued)
+        scheduleSave()
     }
+    fun updateCatalog(value: ProviderCatalog, managed: Boolean = false) { requireCatalog = managed; catalog = value; applySessionConfig() }
+    fun selectModel(providerId: String, modelId: String) {
+        cache[activeId]?.let { it.providerId = providerId; it.modelId = modelId }
+        applySessionConfig(); publish()
+    }
+    private fun applySessionConfig() {
+        val state = cache[activeId] ?: return
+        val selected = catalog.copy(selectedProvider = state.providerId, selectedModel = state.modelId).activeConfig()
+            ?: catalog.activeConfig() ?: return
+        state.providerId = selected.providerId; state.modelId = selected.model
+        updateAiConfig(selected)
+    }
+    fun renameSession(id: String, title: String) { manager?.renameSession(id, title); publish() }
+    fun addAttachments(values: List<Attachment>, sessionId: String = activeId) {
+        val state = cache[sessionId] ?: return
+        if (state.attachments.size + values.size > 4) { reportError("每条消息最多 4 个附件"); return }
+        state.attachments += values; publish()
+    }
+    fun removeAttachment(id: String) { cache[activeId]?.let { it.attachments = it.attachments.filterNot { a -> a.id == id } }; publish() }
+    fun reportError(value: String?) { error = value; publish() }
+    private fun snapshot(): ChatArchive {
+        val info = manager?.sessionsFlow?.value.orEmpty().associateBy { it.id }
+        return ChatArchive(activeId = activeId, sessions = cache.map { (id, value) ->
+            SavedChat(id, info[id]?.title ?: "新会话", info[id]?.createdAt ?: System.currentTimeMillis(), manager?.getMessages(id).orEmpty(),
+                value.messages, value.input, value.attachments, value.providerId, value.modelId, value.usage, value.queued)
+        })
+    }
+    private fun scheduleSave() {
+        if (loading || storage == null || !storageHealthy) return
+        saveDirty = true
+        if (saveJob?.isActive == true) return
+        saveJob = viewModelScope.launch {
+            while (saveDirty) {
+                delay(300)
+                saveDirty = false
+                val archive = snapshot()
+                try { storage.save(archive) }
+                catch (e: Exception) { if (e is CancellationException) throw e; error = "会话保存失败：${e.message}"; _uiState.value = _uiState.value.copy(error = error) }
+            }
+        }
+    }
+
     fun updateAiConfig(value: AiConfig) {
         if (config == value) return
         stopStreaming()
         config = value
         manager?.updateConfig(clientConfig())
         connectionChanged(false)
+        publish()
     }
     fun updateInputText(text: String) { cache[activeId]?.input = text; publish() }
     fun sendMessage() {
         val state = cache[activeId] ?: return
         val text = state.input.trim()
-        if (text.isEmpty() || state.streaming) return
+        if (loading) return
+        if (requireCatalog && catalog.providers.none { p -> p.id == state.providerId && p.models.any { it.id == state.modelId } }) {
+            reportError("请先添加供应商并选择模型"); return
+        }
+        if (state.question != null) { if (ensureManager().answer(activeId, text)) { state.input = ""; publish() }; return }
+        if (text.isEmpty() && state.attachments.isEmpty()) {
+            if (!state.streaming && state.queued.isNotEmpty()) { state.streaming = true; ensureManager().resumeQueued(activeId); publish() }
+            return
+        }
+        if (state.attachments.any { it.isImage } && !config.supportsImages) { reportError("当前模型未启用图像支持，请选择图像模型或在模型配置中启用"); return }
+        val attachments = state.attachments
+        state.attachments = emptyList()
+        error = null
         state.input = ""
+        if (state.streaming) {
+            runCatching { ensureManager().steer(text, attachments, activeId) }.onFailure { state.input = text; state.attachments = attachments; error = it.message }
+            publish(); return
+        }
         state.streaming = true
         publish()
-        ensureManager().sendMessage(text, activeId)
+        ensureManager().sendMessage(text, activeId, attachments)
+    }
+    fun answerQuestion(text: String) { if (manager?.answer(activeId, text) == true) cache[activeId]?.question = null; publish() }
+    fun interruptAndSend() {
+        val state = cache[activeId] ?: return
+        val text = state.input.trim(); val attachments = state.attachments
+        if (text.isBlank() && attachments.isEmpty()) return
+        if (attachments.any { it.isImage } && !config.supportsImages) { reportError("当前模型未启用图像支持"); return }
+        stopStreaming(); state.question = null; state.input = ""; state.attachments = emptyList(); state.streaming = true
+        ensureManager().sendMessage(text, activeId, attachments); publish()
     }
     fun stopStreaming() {
         manager?.cancelGeneration()
-        cache[activeId]?.let { finishAssistant(it); it.streaming = false }
+        cache[activeId]?.let { finishAssistant(it); it.streaming = false; it.question = null }
         publish()
     }
     fun newSession() {
         stopStreaming()
         activeId = ensureManager().createSession()
         cache[activeId] = SessionUi()
+        applySessionConfig()
         publish()
     }
     fun switchSession(id: String) {
         if (id == activeId || id !in cache) return
         stopStreaming()
-        if (ensureManager().switchSession(id)) { activeId = id; publish() }
+        if (ensureManager().switchSession(id)) { activeId = id; applySessionConfig(); publish() }
     }
     fun deleteSession(id: String) {
         if (id !in cache) return
@@ -124,6 +241,7 @@ class ChatViewModel(
             if (next == null) { newSession(); return }
             activeId = next
             manager?.switchSession(next)
+            applySessionConfig()
         }
         publish()
     }
@@ -141,8 +259,13 @@ class ChatViewModel(
     }
     private fun handleEvent(state: SessionUi, event: ChatEvent) {
         when (event) {
+            is ChatEvent.QuestionAsked -> state.question = event.question
+            ChatEvent.QuestionClosed -> state.question = null
+            is ChatEvent.QueueUpdated -> state.queued = event.messages
+            is ChatEvent.UsageUpdated -> state.usage = event.usage
+            is ChatEvent.Retrying -> update(state, state.assistantId) { it.copy(content = "请求暂时失败，${event.delayMs / 1000} 秒后第 ${event.attempt} 次重试…", phase = AssistantPhase.THINKING) }
             is ChatEvent.MessageAdded -> when (event.message.role) {
-                "user" -> append(state, ChatMessage(role = MessageRole.USER, content = event.message.content.orEmpty()))
+                "user" -> append(state, ChatMessage(role = MessageRole.USER, content = event.message.content.orEmpty(), attachments = event.message.attachments))
                 "assistant" -> {
                     connectionChanged(true)
                     if (state.assistantId == null) {
@@ -162,7 +285,7 @@ class ChatViewModel(
             }
             is ChatEvent.StreamingText -> {
                 connectionChanged(true)
-                update(state, state.assistantId) { it.copy(content = it.content + event.delta,
+                update(state, state.assistantId) { it.copy(content = (if (it.phase == AssistantPhase.THINKING) "" else it.content) + event.delta,
                     phase = if (it.phase == AssistantPhase.SUMMARIZING) it.phase else AssistantPhase.RESPONDING) }
             }
             is ChatEvent.ToolCallStreaming -> update(state, state.assistantId) { message ->
@@ -196,6 +319,7 @@ class ChatViewModel(
                 state.streaming = false
             }
             ChatEvent.GenerationComplete, ChatEvent.GenerationCancelled -> {
+                state.question = null
                 finishAssistant(state, if (event == ChatEvent.GenerationComplete) AssistantPhase.COMPLETE else AssistantPhase.CANCELLED)
                 state.messages = state.messages.map { message -> message.copy(toolCalls = message.toolCalls?.map {
                     if (it.status == ToolCallStatus.PENDING || it.status == ToolCallStatus.RUNNING) it.copy(status = ToolCallStatus.CANCELLED) else it
@@ -205,5 +329,10 @@ class ChatViewModel(
             ChatEvent.SessionCleared -> { state.assistantId = null; state.messages = emptyList() }
         }
     }
-    override fun onCleared() { collector?.cancel(); sessionCollector?.cancel(); manager?.destroy(); super.onCleared() }
+    override fun onCleared() {
+        if (storage != null && storageHealthy && !loading) {
+            val archive = snapshot()
+            runCatching { KernelAiApplication.instance.persistArchive(storage!!, archive) }
+        }
+        collector?.cancel(); sessionCollector?.cancel(); manager?.destroy(); super.onCleared() }
 }
