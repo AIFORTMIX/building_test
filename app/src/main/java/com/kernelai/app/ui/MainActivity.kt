@@ -23,6 +23,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.widthIn
+import top.yukonga.miuix.kmp.blur.layerBackdrop
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -91,9 +95,11 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 使用 Miuix 主题、菜单与自适应导航
  */
 class MainActivity : ComponentActivity() {
+    private val requestedChat = kotlinx.coroutines.flow.MutableStateFlow(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (intent.getBooleanExtra(com.kernelai.app.ai.AgentTaskService.OPEN_CHAT, false)) requestedChat.value++
 
         setContent {
             val modelsViewModel = viewModel<ModelsViewModel>()
@@ -136,6 +142,13 @@ class MainActivity : ComponentActivity() {
             val navigator = rememberAppNavigator(Route.Main)
             val pagerState = rememberPagerState { MainPagerConfig.PAGE_COUNT }
             val settingsScrollState = rememberScrollState()
+            val chatRequest by requestedChat.collectAsStateWithLifecycle()
+            LaunchedEffect(chatRequest) {
+                if (chatRequest > 0) {
+                    while (navigator.backStack.size > 1) navigator.pop()
+                    pagerState.scrollToPage(MainPagerConfig.PAGE_CHAT)
+                }
+            }
             val themeSettings = KernelAiAppSettings(
                 colorMode = com.kernelai.app.ui.theme.KernelAiColorMode.fromThemeMode(appSettings.themeMode)
             )
@@ -167,6 +180,7 @@ class MainActivity : ComponentActivity() {
                             entryProvider = entryProvider {
                                 entry<Route.McpAudit> { StandalonePage { McpAuditScreen { navigator.pop() } } }
                                 entry<Route.Models> { StandalonePage { ModelsScreen(modelsViewModel) { navigator.pop() } } }
+                                entry<Route.Workspace> { StandalonePage { com.kernelai.app.ui.screen.settings.WorkspaceScreen { navigator.pop() } } }
                                 entry<Route.Main> { mainScreenEntry() }
                                 entry<Route.Chat> { mainScreenEntry() }
                                 entry<Route.Settings> { mainScreenEntry() }
@@ -186,7 +200,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    Scaffold { navDisplay() }
+                    Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) { navDisplay() }
                 }
             }
         }
@@ -195,6 +209,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getBooleanExtra(com.kernelai.app.ai.AgentTaskService.OPEN_CHAT, false)) requestedChat.value++
     }
 }
 
@@ -266,55 +281,48 @@ private fun MainScreen(
 
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-    val pagerContent = @Composable {
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxSize(),
-            beyondViewportPageCount = 1,
-        ) { page ->
-            when (page) {
-                MainPagerConfig.PAGE_CHAT -> ChatScreen(connectionStatus = connectionStatus, aiConfig = appSettings.aiConfig,
-                    modelCatalog = modelState.catalog, requireModel = true, onManageModels = { navigator.push(Route.Models) },
-                    onOpenPage = ::selectPage, onOpenUtility = { name ->
-                        SideNavDestination.entries.firstOrNull { it.label == name }?.let { navigator.push(it.route) }
-                    })
-                MainPagerConfig.PAGE_PROCESS -> ProcessScreen()
-                MainPagerConfig.PAGE_BREAKPOINT -> BreakpointScreen()
-                MainPagerConfig.PAGE_SETTINGS -> SettingsScreen(
-                    scrollState = settingsScrollState,
-                    connectionStatus = connectionStatus,
-                    appSettings = appSettings,
-                    onManageModels = { navigator.push(Route.Models) },
-                    onOpenAudit = { navigator.push(Route.McpAudit) },
-                    onThemeModeChange = { driverViewModel.updateThemeMode(it) },
-                    onReconnectDriver = { driverViewModel.reconnectDriver() },
-                    onToggleMcp = { driverViewModel.toggleMcpServer() },
-                )
-            }
-        }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    val navigationBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+    val bottomReserve = if (keyboardVisible) 0.dp else navigationBottom + if (isLandscape) 8.dp else 86.dp
+    val background = MiuixTheme.colorScheme.background
+    // Each page records its own content; a retained off-screen page cannot replace the chat backdrop.
+    val backdrops = List(MainPagerConfig.PAGE_COUNT) {
+        top.yukonga.miuix.kmp.blur.rememberLayerBackdrop { drawRect(background); drawContent() }
     }
-
-    if (isLandscape) {
-        Row(Modifier.fillMaxSize()) {
-            Column(Modifier.padding(8.dp)) {
-                BottomNavDestination.entries.forEachIndexed { index, dest ->
-                    top.yukonga.miuix.kmp.basic.Text(dest.label, Modifier.clickable { selectPage(index) }.padding(12.dp),
-                        color = if (selectedPage == index) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackground)
-                }
-                SideNavDestination.entries.forEach { dest ->
-                    top.yukonga.miuix.kmp.basic.Text(dest.label, Modifier.clickable { navigator.push(dest.route) }.padding(12.dp))
+    Box(Modifier.fillMaxSize().background(background)) {
+        HorizontalPager(state = pagerState,
+            modifier = Modifier.fillMaxSize().padding(start = if (isLandscape) 96.dp else 0.dp),
+            beyondViewportPageCount = 1, userScrollEnabled = false) { page ->
+            if (page == MainPagerConfig.PAGE_CHAT) {
+                ChatScreen(connectionStatus = connectionStatus, aiConfig = appSettings.aiConfig,
+                    modelCatalog = modelState.catalog, requireModel = true,
+                    onManageModels = { navigator.push(Route.Models) }, onOpenPage = ::selectPage,
+                    onOpenUtility = { name -> if (name == "工作区") navigator.push(Route.Workspace) else SideNavDestination.entries.firstOrNull { it.label == name }?.let { navigator.push(it.route) } },
+                    glassBackdrop = backdrops[page], navigationInset = bottomReserve, modelLoading = modelState.loading)
+            } else Box(Modifier.fillMaxSize().layerBackdrop(backdrops[page])
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                .padding(bottom = bottomReserve)) {
+                when (page) {
+                    MainPagerConfig.PAGE_PROCESS -> ProcessScreen()
+                    MainPagerConfig.PAGE_BREAKPOINT -> BreakpointScreen()
+                    MainPagerConfig.PAGE_SETTINGS -> SettingsScreen(scrollState = settingsScrollState,
+                        connectionStatus = connectionStatus, appSettings = appSettings,
+                        onManageModels = { navigator.push(Route.Models) },
+                        onOpenAudit = { navigator.push(Route.McpAudit) },
+                        onOpenWorkspace = { navigator.push(Route.Workspace) },
+                        onThemeModeChange = driverViewModel::updateThemeMode,
+                        onReconnectDriver = driverViewModel::reconnectDriver,
+                        onToggleMcp = driverViewModel::toggleMcpServer)
                 }
             }
-            Box(Modifier.weight(1f)) { pagerContent() }
         }
-    } else {
-        Scaffold(bottomBar = {
-            if (selectedPage != MainPagerConfig.PAGE_CHAT) MiuixNavigationBar(color = MiuixTheme.colorScheme.surface) {
-                BottomNavDestination.entries.forEachIndexed { index, dest ->
-                    MiuixNavigationBarItem(modifier = Modifier.weight(1f), icon = dest.icon, label = dest.label,
-                        selected = selectedPage == index, onClick = { selectPage(index) })
-                }
-            }
-        }) { innerPadding -> Box(Modifier.padding(innerPadding)) { pagerContent() } }
+        if (!keyboardVisible) {
+            if (isLandscape) com.kernelai.app.ui.components.GlassNavigation(backdrops[selectedPage], selectedPage, ::selectPage,
+                Modifier.align(androidx.compose.ui.Alignment.CenterStart).padding(start = 10.dp), vertical = true)
+            else com.kernelai.app.ui.components.GlassNavigation(backdrops[selectedPage], selectedPage, ::selectPage,
+                Modifier.align(androidx.compose.ui.Alignment.BottomCenter).padding(horizontal = 20.dp)
+                    .padding(bottom = navigationBottom + 10.dp).widthIn(max = 440.dp).fillMaxWidth())
+        }
     }
 }

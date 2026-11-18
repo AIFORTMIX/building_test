@@ -142,8 +142,8 @@ fun BreakpointScreen(
     if (showAddDialog) {
         AddBreakpointDialog(
             onDismiss = { viewModel.hideAddDialog() },
-            onConfirm = { address, type, pid ->
-                viewModel.addBreakpoint(address, type, pid)
+            onConfirm = { address, type, pid, identity ->
+                viewModel.addBreakpoint(address, type, pid, identity)
             }
         )
     }
@@ -324,23 +324,38 @@ fun RegisterSnapshotView(
 @Composable
 fun AddBreakpointDialog(
     onDismiss: () -> Unit,
-    onConfirm: (address: Long, type: BreakpointType, pid: Int) -> Unit
+    onConfirm: (address: Long, type: BreakpointType, pid: Int, identity: String) -> Unit
 ) {
     var addressText by remember { mutableStateOf("") }
     var selectedType by remember { mutableStateOf(BreakpointType.HW_EXECUTE) }
     var pidText by remember { mutableStateOf("") }
     var typeMenuExpanded by remember { mutableStateOf(false) }
+    val binding = com.kernelai.app.ui.screen.memory.rememberProcessBinding(pidText) { addressText = "" }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("添加硬件断点") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = pidText,
+                    onValueChange = { pidText = it.filter { c -> c.isDigit() } },
+                    label = { Text("PID") },
+                    placeholder = { Text("进程 ID") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                    TextButton(onClick = { binding.bind(pidText) }, enabled = pidText.toIntOrNull()?.let { it > 0 } == true && !binding.busy) { Text("绑定目标") }
+                }
+                Text(binding.status, fontSize = 12.sp)
+
                 OutlinedTextField(
                     value = addressText,
                     onValueChange = { addressText = it },
                     label = { Text("地址 (十六进制)") },
-                    placeholder = { Text("0x7F40001234") },
+                    placeholder = { Text("绑定后输入当前进程的地址") },
+                    readOnly = binding.target == null,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -371,14 +386,7 @@ fun AddBreakpointDialog(
                     }
                 }
 
-                OutlinedTextField(
-                    value = pidText,
-                    onValueChange = { pidText = it.filter { c -> c.isDigit() } },
-                    label = { Text("PID") },
-                    placeholder = { Text("进程 ID") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+
             }
         },
         confirmButton = {
@@ -387,10 +395,10 @@ fun AddBreakpointDialog(
                     val address = addressText.removePrefix("0x").removePrefix("0X").toULongOrNull(16)?.toLong()
                     val pid = pidText.toIntOrNull() ?: 0
                     if (address != null) {
-                        onConfirm(address, selectedType, pid)
+                        binding.target?.takeIf { it.pid == pid }?.let { onConfirm(address, selectedType, pid, it.identity) }
                     }
                 },
-                enabled = addressText.removePrefix("0x").removePrefix("0X").toULongOrNull(16)?.let { it != 0uL } == true && (pidText.toIntOrNull() ?: 0) > 0
+                enabled = binding.target != null && addressText.removePrefix("0x").removePrefix("0X").toULongOrNull(16)?.let { it != 0uL } == true && (pidText.toIntOrNull() ?: 0) > 0
             ) {
                 Text("添加")
             }

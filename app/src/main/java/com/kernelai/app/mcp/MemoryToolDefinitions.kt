@@ -30,6 +30,7 @@ internal object MemoryToolDefinitions {
         McpToolDefinitions.ToolDef(name, description, emptyList(), schema(properties, required, target))
 
     val tools = listOf(
+        tool("process_status", "核实进程是否仍存活及启动/执行映像身份。返回 process_identity；所有地址读取、指针链、写入与设断点须原样传回 expected_identity。previous_identity 可检测重启或 PID 复用。变化后重新解析模块和地址，不自动复用旧地址。", target + mapOf("previous_identity" to prop("string", "此前的 process_identity，可选，用于持续核对同一进程实例")), emptyList(), true),
         tool("process_resolve", "用驱动全量快照核对完整包名，返回 running 和 PID。避免将 process_list 的空页当作未运行；优先核对微信 com.tencent.mm。", mapOf("pkg_name" to prop("string", "完整包名，最多 255 UTF-8 字节")), listOf("pkg_name")),
         tool("address_calculate", "仅计算 base_address + offsets，不访问驱动、不读取内存。检测 64 位溢出，返回每次计算轨迹。", mapOf("base_address" to numeric, "offsets" to array("顺序相加的有符号偏移", numeric, 0, 64)), listOf("base_address")),
         tool("module_address", "查找唯一模块首个文件映射起点并计算偏移。该基址不保证等于 ELF load bias；先检查映射和 file_offset。", target + mapOf("module" to prop("string", "模块文件名或准确完整路径"), "offsets" to array("相对映射起点的顺序偏移", numeric, 0, 64)), listOf("module"), true),

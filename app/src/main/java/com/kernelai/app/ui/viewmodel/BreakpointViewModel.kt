@@ -19,7 +19,11 @@ class BreakpointViewModel(private val tools: McpToolExecutor = KernelAiApplicati
     private val _registerSnapshot = MutableStateFlow<RegisterSnapshot?>(null); val registerSnapshot = _registerSnapshot.asStateFlow()
     private val _showAddDialog = MutableStateFlow(false); val showAddDialog = _showAddDialog.asStateFlow()
     private val _status = MutableStateFlow("点击刷新读取驱动硬件断点，列表不含软件断点"); val status = _status.asStateFlow()
-    private suspend fun call(name: String, args: JsonObject) = Json.parseToJsonElement(tools.executeTool(name, args)).jsonObject
+    private suspend fun call(name: String, args: JsonObject): JsonObject {
+        val result = Json.parseToJsonElement(tools.executeTool(name, args)).jsonObject
+        check(result["is_error"]?.jsonPrimitive?.booleanOrNull != true) { result["message"]?.jsonPrimitive?.contentOrNull ?: "设备操作失败" }
+        return result
+    }
     private suspend fun refreshList() {
         val result = call("breakpoint_list", JsonObject(emptyMap()))
         _breakpoints.value = result["breakpoints"]!!.jsonArray.map { it.jsonObject.let { b ->
@@ -36,10 +40,10 @@ class BreakpointViewModel(private val tools: McpToolExecutor = KernelAiApplicati
     fun loadBreakpoints() = operation { refreshList() }
     fun showAddDialog() { _showAddDialog.value = true }
     fun hideAddDialog() { _showAddDialog.value = false }
-    fun addBreakpoint(address: Long, type: BreakpointType, pid: Int, length: Int = 4) = operation {
+    fun addBreakpoint(address: Long, type: BreakpointType, pid: Int, expectedIdentity: String, length: Int = 4) = operation {
         require(pid > 0 && address != 0L) { "请输入有效 PID 和地址" }
         val name = when (type) { BreakpointType.HW_EXECUTE -> "hw_execute"; BreakpointType.HW_READ -> "hw_read"; BreakpointType.HW_WRITE -> "hw_write"; BreakpointType.HW_ACCESS -> "hw_access"; BreakpointType.SW -> "sw" }
-        call("breakpoint_set", buildJsonObject { put("pid", pid); put("address", "0x" + address.toULong().toString(16)); put("type", name); put("length", length) })
+        call("breakpoint_set", buildJsonObject { put("pid", pid); put("expected_identity", expectedIdentity); put("address", "0x" + address.toULong().toString(16)); put("type", name); put("length", length) })
         _showAddDialog.value = false; refreshList()
     }
     fun removeBreakpoint(breakpoint: BreakpointInfo) = operation {

@@ -17,6 +17,8 @@ import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.window.WindowDialog
 import top.yukonga.miuix.kmp.window.WindowListPopup
+import com.kernelai.app.ui.screen.chat.LocalGlassBackdrop
+import com.kernelai.app.ui.screen.chat.GlassDialog
 
 /** Small composition helpers built entirely from Miuix controls. */
 @Composable
@@ -49,6 +51,10 @@ fun FilterChip(selected: Boolean, onClick: () -> Unit, label: @Composable () -> 
 
 @Composable
 fun DropdownMenu(expanded: Boolean, onDismissRequest: () -> Unit, content: @Composable () -> Unit) {
+    if (LocalGlassBackdrop.current != null) {
+        GlassDialog(expanded, onDismissRequest) { Column { content() } }
+        return
+    }
     WindowListPopup(show = expanded, onDismissRequest = onDismissRequest, enableWindowDim = false) {
         ListPopupColumn(content)
     }
@@ -64,6 +70,13 @@ fun DropdownMenuItem(text: @Composable () -> Unit, onClick: () -> Unit) {
 @Composable
 fun AlertDialog(onDismissRequest: () -> Unit, title: @Composable () -> Unit, text: @Composable () -> Unit,
     confirmButton: @Composable () -> Unit, dismissButton: @Composable () -> Unit) {
+    if (LocalGlassBackdrop.current != null) {
+        GlassDialog(true, onDismissRequest) {
+            title(); text()
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { dismissButton(); confirmButton() }
+        }
+        return
+    }
     WindowDialog(show = true, onDismissRequest = onDismissRequest) {
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             title(); text()

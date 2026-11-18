@@ -21,7 +21,7 @@ class McpToolExecutorImpl(
 ) : McpToolExecutor {
 
     private val processQueries = ProcessQueries(deviceNode)
-    private val analysis = MemoryAnalysisTools(::resolvePid, ::readMemoryBytes)
+    private val processGuard = ProcessGuard(deviceNode::processSnapshot)
 
     companion object {
         private const val TAG = "McpToolExecutor"
@@ -68,32 +68,74 @@ class McpToolExecutorImpl(
         require(McpToolDefinitions.ALL_TOOLS.any { it.name == name }) { "未知工具: $name" }
         if (name == "address_calculate") return MemoryAnalysisTools.calculate(arguments).toString()
         ensureDeviceOpen()
-
-        return when (name) {
+        if (name == "process_status") {
+            val pid = arguments["pid"]?.jsonPrimitive?.intOrNull ?: run {
+                val resolution = processQueries.resolve(arguments["pkg_name"]?.jsonPrimitive?.contentOrNull ?: error("缺少 pid 或 pkg_name"))
+                if (!resolution.running) return buildJsonObject { put("pid", 0); put("running", false); put("state", "not_running"); put("previous_matches", false); put("safe_to_reuse_addresses", false) }.toString()
+                resolution.pid
+            }
+            require(pid > 0)
+            return ProcessGuard.status(deviceNode.processSnapshot(pid), arguments["previous_identity"]?.jsonPrimitive?.contentOrNull).toString()
+        }
+        if (name == "process_resolve") {
+            val resolution = processQueries.resolve(arguments["pkg_name"]?.jsonPrimitive?.contentOrNull ?: error("缺少 pkg_name"))
+            return buildJsonObject {
+                resolution.json().forEach { (key, value) -> put(key, value) }
+                if (resolution.running) put("target_status", ProcessGuard.status(deviceNode.processSnapshot(resolution.pid)))
+            }.toString()
+        }
+        var submitted = false
+        return try {
+        val before = if (name in ProcessGuard.TARGET_TOOLS) {
+            val expected = arguments["expected_identity"]?.jsonPrimitive?.contentOrNull
+            if (name in ProcessGuard.ADDRESS_TOOLS && expected.isNullOrBlank()) return buildJsonObject {
+                put("is_error", true); put("error_code", "process_identity_required"); put("requires_rebind", true)
+                put("message", "先调用 process_status 获取 process_identity，核对当前模块与地址后，通过 expected_identity 传回；不能对重启后的目标沿用旧地址")
+            }.toString()
+            processGuard.capture(resolvePid(arguments), expected)
+        } else null
+        val args = if (before == null) arguments else JsonObject(arguments + ("pid" to JsonPrimitive(before.pid)))
+        val analysis = MemoryAnalysisTools({ if (before != null) before.pid else resolvePid(it) }, { pid, address, size ->
+            if (before != null) processGuard.verify(before)
+            readMemoryBytes(pid, address, size)
+        })
+        submitted = name in ProcessGuard.MUTATING_TOOLS
+        val result = try { when (name) {
             "process_list"     -> handleProcessList(arguments)
-            "process_info"     -> handleProcessInfo(arguments)
+            "process_info"     -> handleProcessInfo(args)
             "process_resolve"  -> processQueries.resolve(arguments["pkg_name"]?.jsonPrimitive?.contentOrNull ?: error("缺少 pkg_name")).json().toString()
             "address_calculate" -> MemoryAnalysisTools.calculate(arguments).toString()
-            "pointer_chain" -> analysis.chain(arguments).toString()
-            "memory_read_typed" -> analysis.typed(arguments).toString()
-            "memory_read_string" -> analysis.string(arguments).toString()
-            "memory_read_struct" -> analysis.structure(arguments).toString()
-            "memory_inspect" -> analysis.inspect(arguments).toString()
-            "module_address" -> handleModuleAddress(arguments)
-            "memory_read"      -> handleMemoryRead(arguments)
-            "memory_write"     -> handleMemoryWrite(arguments)
-            "memory_search"    -> handleMemorySearch(arguments)
-            "module_list"      -> handleModuleList(arguments)
-            "memory_map"       -> handleMemoryMap(arguments)
-            "breakpoint_set"   -> handleBreakpointSet(arguments)
+            "pointer_chain" -> analysis.chain(args).toString()
+            "memory_read_typed" -> analysis.typed(args).toString()
+            "memory_read_string" -> analysis.string(args).toString()
+            "memory_read_struct" -> analysis.structure(args).toString()
+            "memory_inspect" -> analysis.inspect(args).toString()
+            "module_address" -> handleModuleAddress(args)
+            "memory_read"      -> handleMemoryRead(args)
+            "memory_write"     -> handleMemoryWrite(args)
+            "memory_search"    -> handleMemorySearch(args)
+            "module_list"      -> handleModuleList(args)
+            "memory_map"       -> handleMemoryMap(args)
+            "breakpoint_set"   -> handleBreakpointSet(args)
             "breakpoint_remove"-> handleBreakpointRemove(arguments)
             "breakpoint_list"  -> handleBreakpointList(arguments)
             "register_read"    -> handleRegisterRead(arguments)
-            "disassemble_at"   -> handleDisassembleAt(arguments)
-            "callstack_capture"-> handleCallstackCapture(arguments)
-            "thread_list"      -> handleThreadList(arguments)
+            "disassemble_at"   -> handleDisassembleAt(args)
+            "callstack_capture"-> handleCallstackCapture(args)
+            "thread_list"      -> handleThreadList(args)
             else -> throw IllegalArgumentException("未知工具: $name")
+        } } catch (error: Exception) {
+            if (before != null) processGuard.verify(before)
+            throw error
         }
+        if (before == null) result else {
+            processGuard.verify(before)
+            buildJsonObject {
+                Json.parseToJsonElement(result).jsonObject.forEach { (key, value) -> put(key, value) }
+                put("process_identity", before.identity); put("process_checked", true); put("snapshot_atomic", false)
+            }.toString()
+        }
+        } catch (changed: TargetProcessChanged) { ProcessGuard.failure(changed, submitted).toString() }
     }
 
     // =========================================================================

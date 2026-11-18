@@ -45,13 +45,13 @@ private val detailJson = Json { prettyPrint = true }
 fun ExecutionStatus(message: ChatMessage, color: Color) {
     val label = when (message.phase) {
         AssistantPhase.THINKING -> "思考中…"
-        AssistantPhase.RESPONDING -> "正在生成回复…"
+        AssistantPhase.RESPONDING -> if (message.content.isNotBlank()) return else "正在生成回复…"
         AssistantPhase.PREPARING_TOOL -> "正在准备工具调用…"
         AssistantPhase.EXECUTING_TOOL -> "正在执行工具…"
-        AssistantPhase.SUMMARIZING -> "正在根据执行结果整理回复…"
+        AssistantPhase.SUMMARIZING -> if (message.content.isNotBlank()) return else "正在根据执行结果整理回复…"
         AssistantPhase.CANCELLED -> "已停止生成"
         AssistantPhase.FAILED -> "请求失败"
-        AssistantPhase.COMPLETE -> if (!message.toolCalls.isNullOrEmpty()) "工具执行结束" else return
+        AssistantPhase.COMPLETE -> return
         null -> return
     }
     Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically,
@@ -62,8 +62,8 @@ fun ExecutionStatus(message: ChatMessage, color: Color) {
 }
 
 @Composable
-fun ToolExecutionGroup(calls: List<ToolCallInfo>, color: Color) {
-    var expanded by rememberSaveable(calls.first().id) { mutableStateOf(true) }
+fun ToolExecutionGroup(calls: List<ToolCallInfo>, color: Color, labelPrefix: String? = null, groupId: String = calls.first().id) {
+    var expanded by rememberSaveable(groupId) { mutableStateOf(false) }
     val active = calls.any { it.status == ToolCallStatus.RUNNING || it.status == ToolCallStatus.PENDING }
     val failed = calls.any { it.status == ToolCallStatus.FAILED }
     val cancelled = calls.any { it.status == ToolCallStatus.CANCELLED }
@@ -80,11 +80,44 @@ fun ToolExecutionGroup(calls: List<ToolCallInfo>, color: Color) {
             .padding(horizontal = 14.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
             ToolStateIcon(status)
             Spacer(Modifier.width(10.dp))
-            Text("$label · ${calls.size} 个", color = color, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.weight(1f).then(executionPulse(active)))
+            Text("${labelPrefix ?: label} · ${calls.size} 项", color = color, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.weight(1f).then(executionPulse(active)))
             Icon(if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
                 if (expanded) "折叠工具列表" else "展开工具列表", tint = color.copy(alpha = .45f))
         }
         if (expanded) calls.forEach { ToolExecutionCard(it, color) }
+    }
+}
+
+/** One compact run, then model-request batches, then per-tool parameters and receipts. */
+@Composable
+internal fun ToolExecutionRun(messages: List<ChatMessage>, color: Color, generationComplete: Boolean = false) {
+    val calls = messages.flatMap { it.toolCalls.orEmpty() }
+    if (calls.isEmpty()) return
+    var expanded by rememberSaveable(messages.first().id) { mutableStateOf(false) }
+    LaunchedEffect(generationComplete) { if (generationComplete) expanded = false }
+    val waitingForModel = messages.any { it.isStreaming && it.toolCalls.isNullOrEmpty() }
+    val active = waitingForModel || calls.any { it.status in listOf(ToolCallStatus.PENDING, ToolCallStatus.RUNNING) }
+    val failed = calls.any { it.status == ToolCallStatus.FAILED }
+    val cancelled = calls.any { it.status == ToolCallStatus.CANCELLED }
+    val status = when { active -> ToolCallStatus.RUNNING; failed -> ToolCallStatus.FAILED; cancelled -> ToolCallStatus.CANCELLED; else -> ToolCallStatus.COMPLETED }
+    Column(Modifier.fillMaxWidth().testTag("tool-run-${messages.first().id}").toolOutline(color)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { expanded = !expanded }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            ToolStateIcon(status)
+            Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                Text(when { active -> "正在执行 · ${calls.size} 项工具"; failed -> "执行过程 · ${calls.size} 项，有失败"; cancelled -> "执行过程 · 已停止"; else -> "执行过程 · ${calls.size} 项工具" },
+                    color = color, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = executionPulse(active))
+                if (active) Text(if (waitingForModel) "正在整理执行结果…" else toolPurpose(calls.firstOrNull { it.status == ToolCallStatus.RUNNING } ?: calls.last()),
+                    color = color.copy(alpha = .58f), fontSize = 11.sp, maxLines = 1)
+            }
+            Icon(if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                if (expanded) "收起执行过程" else "展开执行过程", tint = color.copy(alpha = .5f), modifier = Modifier.size(20.dp))
+        }
+        if (expanded) Column(Modifier.padding(start = 18.dp, end = 10.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            messages.filter { !it.toolCalls.isNullOrEmpty() }.forEachIndexed { index, message -> key(message.id) {
+                if (message.content.isNotBlank()) MarkdownMessage(message.content, false, color)
+                ToolExecutionGroup(message.toolCalls.orEmpty(), color, "第 ${index + 1} 批", message.id)
+            } }
+        }
     }
 }
 

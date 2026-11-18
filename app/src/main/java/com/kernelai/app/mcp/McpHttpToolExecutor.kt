@@ -18,7 +18,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /** AI tool calls traverse the actual JSON-RPC HTTP endpoint used by other MCP clients. */
-class McpHttpToolExecutor(private val endpoint: () -> McpEndpoint) : McpToolExecutor, Closeable {
+class McpHttpToolExecutor(private val endpoint: () -> McpEndpoint, private val additionalTools: List<McpToolExecutor.ToolDefinition> = emptyList()) : McpToolExecutor, Closeable {
     private val http = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS).followRedirects(false).build()
     private val ids = AtomicLong()
@@ -27,7 +27,7 @@ class McpHttpToolExecutor(private val endpoint: () -> McpEndpoint) : McpToolExec
     private var availableTools = emptySet<String>()
     override fun getToolDefinitions() = McpToolDefinitions.ALL_TOOLS.map {
         McpToolExecutor.ToolDefinition(it.name, it.description, McpToolDefinitions.toJsonSchema(it))
-    }
+    } + additionalTools
     override suspend fun executeTool(name: String, arguments: JsonObject): String = withContext(Dispatchers.IO) {
         val connection = endpoint()
         initializeLock.withLock {

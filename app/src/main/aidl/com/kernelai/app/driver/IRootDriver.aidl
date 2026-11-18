@@ -7,4 +7,5 @@ interface IRootDriver {
     void close();
     String getLastError();
     int ioctl(int command, in SharedMemory memory, int size);
+    String processSnapshot(int pid);
 }

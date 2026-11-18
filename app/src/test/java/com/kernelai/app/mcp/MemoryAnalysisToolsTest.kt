@@ -83,8 +83,8 @@ class MemoryAnalysisToolsTest {
             override fun close() {}
             override fun ioctl(command: Int, arg: ByteArray): Int = error("no device access")
         }).getToolDefinitions()
-        assertEquals(22, definitions.size)
-        assertEquals(22, definitions.map { it.name }.distinct().size)
+        assertEquals(23, definitions.size)
+        assertEquals(23, definitions.map { it.name }.distinct().size)
         assertTrue(definitions.all { it.inputSchema["properties"]!!.jsonObject.containsKey("_purpose") })
         assertEquals(32, definitions.first { it.name == "pointer_chain" }.inputSchema["properties"]!!.jsonObject["steps"]!!.jsonObject["maxItems"]!!.jsonPrimitive.int)
     }

@@ -79,7 +79,8 @@ class AgentUiTest {
         Assert.assertNull(vm.uiState.value.question)
         Assert.assertEquals(2, api.requestCount)
     }
-    @Test fun darkArtifactsAndToolPurposeRemainReadableWithoutFetchingLinks() {
+    @Test fun darkArtifactsPreviewImagesButNeverDownloadPackagesAutomatically() {
+        api.enqueue(MockResponse().setHeader("Content-Type", "image/png").setBody(okio.Buffer().write(previewPng())))
         val code = "<!doctype html><html><body><h1>HTML 产物预览</h1><p>用于验证深色模式与原生大卡片布局。</p></body></html>"
         val markdown = "## 分析结果\n\n```html\n$code\n```\n\n[测试安装包](${api.url("/sample.apk")})\n\n![测试图像](${api.url("/sample.png")})"
         val call = ToolCallInfo("purpose-ui", "process_list", """{"filter":"tencent","_purpose":"确认微信相关进程是否正在运行"}""", "{\"processes\":[]}", ToolCallStatus.COMPLETED)
@@ -94,9 +95,11 @@ class AgentUiTest {
         ui.onNodeWithText("AI 产物.html").performScrollTo().assertIsDisplayed()
         screenshot("agent-dark-html-artifact")
         ui.onNodeWithText("APK  ·  产物").performScrollTo().assertIsDisplayed()
-        ui.onNodeWithText("PNG  ·  产物").performScrollTo().assertIsDisplayed()
+        ui.onNodeWithTag("inline-image").performScrollTo().assertIsDisplayed()
+        ui.waitUntil(10_000) { ui.onAllNodesWithTag("inline-image").fetchSemanticsNodes().any { it.config[androidx.compose.ui.semantics.SemanticsProperties.StateDescription] == "已加载" } }
         screenshot("agent-dark-download-artifacts")
-        Assert.assertEquals(0, api.requestCount)
+        Assert.assertEquals(1, api.requestCount)
+        Assert.assertEquals("/sample.png", api.takeRequest().path)
     }
     @Test fun externalToggleStartsSingleApkHostAndRecordsExternalCall() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -153,6 +156,35 @@ class AgentUiTest {
         ui.onNodeWithText("attachment-fixture.txt").assertIsDisplayed()
         screenshot("agent-imported-attachments")
     }
+    @Test fun completedToolRunFoldsBatchesAndDetailsInThreeLevels() {
+        val completed = androidx.compose.runtime.mutableStateOf(false)
+        val one = ToolCallInfo("tree-one", "process_resolve", "{\"pkg_name\":\"com.tencent.mm\"}", "{\"pid\":123}", ToolCallStatus.COMPLETED)
+        val two = ToolCallInfo("tree-two", "memory_inspect", "{\"pid\":123}", "{\"size\":32}", ToolCallStatus.COMPLETED)
+        val messages = listOf(ChatMessage(id = "batch-one", role = MessageRole.ASSISTANT, content = "", toolCalls = listOf(one)),
+            ChatMessage(id = "batch-two", role = MessageRole.ASSISTANT, content = "", toolCalls = listOf(two)))
+        ui.setContent { KernelAiTheme {
+            Column(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background).verticalScroll(rememberScrollState()).padding(16.dp)) {
+                ToolExecutionRun(messages, MiuixTheme.colorScheme.onBackground, generationComplete = completed.value)
+                ChatMessageBubble(ChatMessage(role = MessageRole.ASSISTANT, content = "工具完成后的正文"))
+            }
+        } }
+        ui.onNodeWithText("执行过程 · 2 项工具").assertIsDisplayed()
+        ui.onNodeWithTag("tool-tree-one").assertDoesNotExist()
+        ui.onNodeWithText("复制消息").assertDoesNotExist()
+        screenshot("glass-tool-run-collapsed")
+        ui.onNodeWithContentDescription("展开执行过程").performClick()
+        ui.onNodeWithText("第 1 批 · 1 项").performClick()
+        ui.runOnIdle { completed.value = true }
+        ui.waitForIdle()
+        ui.onNodeWithText("第 1 批 · 1 项").assertDoesNotExist()
+        ui.onNodeWithContentDescription("展开执行过程").performClick()
+        ui.onNodeWithText("第 1 批 · 1 项").performClick()
+        ui.onNodeWithContentDescription("展开 process_resolve 详情").performClick()
+        ui.onNodeWithText("调用 ID：tree-one").assertIsDisplayed()
+        ui.onNodeWithTag("tool-tree-two").assertDoesNotExist()
+        screenshot("glass-tool-run-details")
+    }
+
     @Test fun streamFollowsUntilDraggedAndResumeReturnsToLatest() {
         val vm = viewModel()
         val events = (1..60).joinToString("") { index ->
@@ -177,7 +209,7 @@ class AgentUiTest {
             screenshot("agent-stream-follow-timeout")
             throw e
         }
-        ui.onNodeWithTag("chat-messages").performTouchInput { swipeDown(durationMillis = 700) }
+        ui.onNodeWithTag("chat-messages").performTouchInput { swipeDown(startY = height * .28f, endY = height * .68f, durationMillis = 700) }
         ui.waitUntil(5000) { ui.mainClock.advanceTimeBy(80); !ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config[ChatIsScrolling] }
         val before = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config
         Assert.assertFalse(before[ChatFollowsLatest])
@@ -185,23 +217,33 @@ class AgentUiTest {
         ui.waitUntil(20000) { ui.mainClock.advanceTimeBy(80); !vm.isStreaming.value }
         val after = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config
         Assert.assertEquals(id, after[ChatAnchorMessage]); Assert.assertEquals(offset, after[ChatAnchorOffset])
-        ui.onNodeWithText("回到最新").performClick()
+        ui.onNodeWithContentDescription("回到最新").performClick()
         ui.waitUntil(5000) { ui.mainClock.advanceTimeBy(80); ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config[ChatAtLatest] }
         ui.mainClock.autoAdvance = true
         ui.waitForIdle()
-        for (index in 54..59) {
+        for (index in 50..59) {
             val node = ui.onNodeWithText("第 $index 段：这是用于验证自动跟随与手动阅读互不干扰的流式回复。", useUnmergedTree = true)
             val next = ui.onNodeWithText("第 ${index + 1} 段：这是用于验证自动跟随与手动阅读互不干扰的流式回复。", useUnmergedTree = true)
-            val bounds = node.fetchSemanticsNode().boundsInRoot
+            val bounds = node.getUnclippedBoundsInRoot()
+            val pixels = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
             node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { get ->
                 val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
                 Assert.assertTrue(get(results))
                 val layout = results.single()
                 Assert.assertTrue("Paragraph must reserve height for every rendered line", layout.size.height + 1 >= layout.getLineBottom(layout.lineCount - 1))
-                Assert.assertTrue("Paragraph $index bounds must contain its rendered lines: $bounds / ${layout.size}", bounds.height + 1 >= layout.size.height)
+                Assert.assertTrue("Paragraph $index bounds must contain its rendered lines: $bounds / ${layout.size}", (bounds.bottom - bounds.top).value * pixels + 1 >= layout.size.height)
             }
-            Assert.assertTrue("Paragraph $index must not overlap the following paragraph", bounds.bottom <= next.fetchSemanticsNode().boundsInRoot.top + 1)
+            Assert.assertTrue("Paragraph $index must keep its 10dp block spacing", bounds.bottom.value + 8 <= next.getUnclippedBoundsInRoot().top.value)
         }
         screenshot("agent-stream-follow-resumed")
+        ui.onNodeWithTag("chat-messages").performTouchInput { swipeDown(startY = height * .28f, endY = height * .68f, durationMillis = 700) }
+        ui.waitUntil(5_000) { !ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config[ChatIsScrolling] }
+        Assert.assertFalse(ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config[ChatFollowsLatest])
+        api.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody("""{"choices":[{"message":{"role":"assistant","content":"第二次发送应主动回到最新"},"finish_reason":"stop"}]}"""))
+        ui.onNodeWithTag("chat-input").performTextInput("继续回复")
+        ui.onNodeWithContentDescription("发送").performClick()
+        ui.waitUntil(15_000) { !vm.isStreaming.value && vm.messages.value.lastOrNull()?.content == "第二次发送应主动回到最新" }
+        ui.waitUntil(10_000) { val state = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config; state[ChatFollowsLatest] && state[ChatAtLatest] }
+        ui.onNodeWithText("第二次发送应主动回到最新").assertIsDisplayed()
     }
 }

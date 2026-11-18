@@ -10,12 +10,17 @@ import com.topjohnwu.superuser.ipc.RootService
 /** Native ioctls run in this bound root process; the kernel capability check stays intact. */
 class RootDriverService : RootService() {
     private val device = DeviceNode()
+    private val inspector = ProcessInspector()
     private val allowedUid by lazy { packageManager.getApplicationInfo(packageName, 0).uid }
     private fun checkCaller() {
         val uid = Binder.getCallingUid()
         if (uid != allowedUid && uid != 0) throw SecurityException("Root driver caller rejected")
     }
     private val binder = object : IRootDriver.Stub() {
+        override fun processSnapshot(pid: Int): String {
+            checkCaller()
+            return kotlinx.serialization.json.Json.encodeToString(ProcessSnapshot.serializer(), inspector.read(pid))
+        }
         override fun open(): Boolean {
             checkCaller()
             if (!device.open()) return false

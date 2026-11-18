@@ -94,7 +94,7 @@ fun KernelAiTheme(
     val context = LocalContext.current
     val currentAppSettings = appSettings ?: KernelAiThemeController.getAppSettings(context)
 
-    MiuixKernelAiTheme(currentAppSettings, content)
+    UiMotionPolicy { MiuixKernelAiTheme(currentAppSettings, content) }
 }
 
 /**

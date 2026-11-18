@@ -24,7 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
+import com.kernelai.app.ui.screen.chat.GlassDialog as WindowDialog
 
 @Composable
 internal fun ConversationList(sessions: List<AiChatManager.SessionInfo>, activeId: String, onClose: () -> Unit,
@@ -83,25 +83,25 @@ internal fun ModelPicker(catalog: ProviderCatalog, onClose: () -> Unit, onSelect
 }
 
 @Composable
-internal fun AttachmentTile(attachment: Attachment, onRemove: (() -> Unit)? = null) {
-    var preview by remember { mutableStateOf(false) }
-    Card {
-        Row(Modifier.fillMaxWidth().clickable { preview = true }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+internal fun AttachmentTile(attachment: Attachment, onRemove: (() -> Unit)? = null, floating: Boolean = false) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var previewError by remember { mutableStateOf<String?>(null) }
+    val tile: @Composable () -> Unit = {
+        Row(Modifier.fillMaxWidth().clickable {
+            runCatching { com.kernelai.app.ui.preview.ArtifactPreview.open(context, attachment.localPath, attachment.name,
+                if (attachment.isImage) com.kernelai.app.ui.preview.PreviewKind.IMAGE else com.kernelai.app.ui.preview.PreviewSource.kind(attachment.name), local = true) }
+                .onFailure { previewError = "预览失败：${it.message}" }
+        }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             if (attachment.isImage) AttachmentImage(attachment, Modifier.size(48.dp))
             Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                 Text(attachment.name, maxLines = 1, fontSize = 13.sp)
                 Text("${if (attachment.isImage) "图像" else "文本文件"} · ${(attachment.size + 1023) / 1024} KiB", fontSize = 10.sp)
+                previewError?.let { Text(it, fontSize = 11.sp, color = MiuixTheme.colorScheme.error) }
             }
             onRemove?.let { TextButton(onClick = it) { Text("移除", fontSize = 11.sp) } }
         }
     }
-    if (preview) WindowDialog(show = true, title = attachment.name, onDismissRequest = { preview = false }) {
-        Column(Modifier.heightIn(max = 520.dp)) {
-            if (attachment.isImage) AttachmentImage(attachment, Modifier.fillMaxWidth().heightIn(max = 430.dp), targetSize = 2048)
-            else SelectionContainer { Text(attachment.textContent.orEmpty().take(20000), Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), fontSize = 13.sp) }
-            TextButton(onClick = { preview = false }) { Text("关闭预览") }
-        }
-    }
+    if (floating) GlassSurface { tile() } else Card { tile() }
 }
 
 @Composable

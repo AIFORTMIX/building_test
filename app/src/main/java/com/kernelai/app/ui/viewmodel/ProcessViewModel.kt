@@ -9,9 +9,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.*
 
 class ProcessViewModel(private val tools: McpToolExecutor = KernelAiApplication.instance.aiToolExecutor) : ViewModel() {
+    private var targetWatch: Job? = null
     private val _allProcesses = MutableStateFlow<List<ProcessInfo>>(emptyList()); val allProcesses = _allProcesses.asStateFlow()
     private val _filteredProcesses = MutableStateFlow<List<ProcessInfo>>(emptyList()); val filteredProcesses = _filteredProcesses.asStateFlow()
     private val _searchQuery = MutableStateFlow(""); val searchQuery = _searchQuery.asStateFlow()
@@ -23,6 +27,7 @@ class ProcessViewModel(private val tools: McpToolExecutor = KernelAiApplication.
     fun refresh() = loadProcesses()
     fun loadProcesses() {
         if (_isLoading.value) return
+        targetWatch?.cancel(); _expandedPid.value = null
         _isLoading.value = true
         viewModelScope.launch {
             try {
@@ -52,9 +57,10 @@ class ProcessViewModel(private val tools: McpToolExecutor = KernelAiApplication.
     fun updateSearchQuery(query: String) { _searchQuery.value = query; applyFilter() }
     fun selectProcess(process: ProcessInfo) { _selectedProcess.value = process }
     fun toggleExpand(pid: Int) {
+        targetWatch?.cancel()
         if (_expandedPid.value == pid) { _expandedPid.value = null; return }
         _expandedPid.value = pid
-        viewModelScope.launch {
+        targetWatch = viewModelScope.launch {
             try {
                 val o = call("process_info", buildJsonObject { put("pid", pid) })
                 val details = ProcessDetails(
@@ -63,10 +69,27 @@ class ProcessViewModel(private val tools: McpToolExecutor = KernelAiApplication.
                     o["threads"]!!.jsonArray.map { it.jsonObject.let { t -> ThreadInfo(t["tid"]!!.jsonPrimitive.int, t.text("comm"), t.text("state"), t.text("stack_ptr"), t.text("pc")) } })
                 _processDetails.value += pid to details
                 _status.value = "PID $pid：模块/VMA/线程有返回上限，列表不能证明不存在其他条目"
-            } catch (e: Exception) { if (e is CancellationException) throw e; _status.value = "PID $pid 查询失败：${e.message}" }
+                val identity = o["process_identity"]?.jsonPrimitive?.contentOrNull ?: return@launch
+                while (isActive && _expandedPid.value == pid) {
+                    delay(2000)
+                    val status = call("process_status", buildJsonObject { put("pid", pid); put("previous_identity", identity) })
+                    if (status["running"]?.jsonPrimitive?.booleanOrNull != true || status["previous_matches"]?.jsonPrimitive?.booleanOrNull != true) {
+                        _processDetails.value -= pid
+                        if (status["state"]?.jsonPrimitive?.contentOrNull == "exited") {
+                            _allProcesses.value = _allProcesses.value.filterNot { it.pid == pid }; applyFilter()
+                        }
+                        _status.value = "PID $pid 已退出、重启或身份无法核实；旧模块和地址已清除，请刷新进程列表"
+                        return@launch
+                    }
+                }
+            } catch (e: Exception) { if (e is CancellationException) throw e; _processDetails.value -= pid; _status.value = "PID $pid 查询失败：${e.message}；旧详情已清除" }
         }
     }
-    private suspend fun call(name: String, args: JsonObject) = Json.parseToJsonElement(tools.executeTool(name, args)).jsonObject
+    private suspend fun call(name: String, args: JsonObject): JsonObject {
+        val result = Json.parseToJsonElement(tools.executeTool(name, args)).jsonObject
+        check(result["is_error"]?.jsonPrimitive?.booleanOrNull != true) { result["message"]?.jsonPrimitive?.contentOrNull ?: "目标查询失败" }
+        return result
+    }
     private fun JsonObject.text(key: String) = this[key]?.jsonPrimitive?.contentOrNull.orEmpty()
     private fun flags(f: Int) = "${if (f and 1 != 0) 'r' else '-'}${if (f and 2 != 0) 'w' else '-'}${if (f and 4 != 0) 'x' else '-'}${if (f and 8 != 0) 's' else 'p'}"
     private fun applyFilter() {

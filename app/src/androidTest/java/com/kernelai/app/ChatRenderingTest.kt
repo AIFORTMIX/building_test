@@ -56,7 +56,8 @@ class ChatRenderingTest {
         }
         ui.waitForIdle()
     }
-    @Test fun markdownDisplaysNativeBlocksAndNeverFetchesImages() {
+    @Test fun markdownDisplaysNativeBlocksAndPreviewsImagesWithoutExecutingHtml() {
+        api.enqueue(MockResponse().setHeader("Content-Type", "image/png").setBody(okio.Buffer().write(previewPng())))
         val source = """
             # Markdown 格式预览
 
@@ -93,7 +94,9 @@ class ChatRenderingTest {
         ui.onNodeWithText("复制代码").performScrollTo().assertIsDisplayed()
         ui.onNodeWithText("<script>alert('literal')</script>").performScrollTo().assertIsDisplayed()
         screenshot("markdown-code-and-safe-html")
-        Assert.assertEquals(0, api.requestCount)
+        ui.waitUntil(10_000) { ui.onAllNodesWithTag("inline-image").fetchSemanticsNodes().any { it.config[SemanticsProperties.StateDescription] == "已加载" } }
+        Assert.assertEquals(1, api.requestCount)
+        Assert.assertEquals("/must-not-load.png", api.takeRequest().path)
     }
     @Test fun toolDetailsExpandParametersResultAndTiming() {
         val call = ToolCallInfo("call_ui", "process_list", "{\"max_count\":1}",
@@ -127,7 +130,7 @@ class ChatRenderingTest {
         ui.waitUntil(15_000) { !vm.isStreaming.value && vm.messages.value.any { it.content.contains("会话一的回复") } }
         ui.waitUntil(10_000) { ui.onAllNodesWithText("会话一的回复").fetchSemanticsNodes().isNotEmpty() }
         ui.onNodeWithTag("chat-input").performTextInput("保留的草稿")
-        ui.onNodeWithText("新对话").performClick()
+        ui.onNodeWithContentDescription("新对话").performClick()
         ui.onNodeWithText("轻微 MCP").assertIsDisplayed()
         ui.onNodeWithText("新会话").performClick()
         ui.onNodeWithText("第一段提问").performClick()
@@ -153,9 +156,11 @@ class ChatRenderingTest {
         ui.onNodeWithContentDescription("发送").performClick()
         ui.waitUntil(15_000) { !vm.isStreaming.value && vm.messages.value.any { it.content.contains("第 45 节") } }
         ui.waitUntil(10_000) { ui.onAllNodesWithText("第 45 节").fetchSemanticsNodes().isNotEmpty() }
+        ui.waitUntil(10_000) { ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config[ChatAtLatest] }
         waitForSettledViewport()
+        screenshot("long-reply-latest-before-reading")
         ui.onNodeWithText("第 45 节").assertIsDisplayed()
-        ui.onNodeWithTag("chat-messages").performTouchInput { swipeDown(durationMillis = 1_000) }
+        ui.onNodeWithTag("chat-messages").performTouchInput { swipeDown(startY = height * .28f, endY = height * .68f, durationMillis = 1_000) }
         waitForSettledViewport()
         val before = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config
         Assert.assertFalse("Reading history must pause automatic following", before[ChatFollowsLatest])
@@ -163,7 +168,7 @@ class ChatRenderingTest {
         val anchorOffset = before[ChatAnchorOffset]
         val paragraphY = ui.onNodeWithText("第 20 节").getUnclippedBoundsInRoot().top
         screenshot("reading-position-before-switch")
-        ui.onNodeWithText("新对话").performClick()
+        ui.onNodeWithContentDescription("新对话").performClick()
         // Exercise a cold renderer cache as well as the saved LazyListState.
         ui.runOnIdle { repeat(50) { MarkdownDocument.parse("缓存淘汰 $it") } }
         ui.onNodeWithText("新会话").performClick()

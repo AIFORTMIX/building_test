@@ -31,7 +31,7 @@ data class ChatUiState(
     val error: String? = null,
     val modelName: String = "",
     val contextWindow: Int = 32768,
-    val question: UserQuestion? = null, val queued: List<ApiChatMessage> = emptyList()
+    val question: UserQuestion? = null, val queued: List<ApiChatMessage> = emptyList(), val followLatestRequest: Long = 0
 )
 
 class ChatViewModel(
@@ -57,7 +57,7 @@ class ChatViewModel(
         var attachments: List<Attachment> = emptyList(),
         var providerId: String = "", var modelId: String = "",
         var usage: ContextUsage? = null,
-        var question: UserQuestion? = null, var queued: List<ApiChatMessage> = emptyList()
+        var question: UserQuestion? = null, var queued: List<ApiChatMessage> = emptyList(), var followLatestRequest: Long = 0
     )
     private val cache = mutableMapOf<String, SessionUi>()
     private var activeId = ""
@@ -125,8 +125,26 @@ class ChatViewModel(
         _messages.value = state.messages
         _inputText.value = state.input
         _isStreaming.value = state.streaming
+        val provider = catalog.providers.firstOrNull { it.id == state.providerId }
+        val label = provider?.models?.firstOrNull { it.id == state.modelId }?.name ?: config.model
         _uiState.value = ChatUiState(activeId, state.messages.takeLast(state.visibleCount), state.input,
-            state.streaming, state.messages.size > state.visibleCount, loading, state.attachments, state.usage, error, config.model, config.contextWindow, state.question, state.queued)
+            state.streaming, state.messages.size > state.visibleCount, loading, state.attachments, state.usage, error, label, config.contextWindow, state.question, state.queued, state.followLatestRequest)
+        if (storage != null) {
+            val assistant = state.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+            val phase = when {
+                state.question != null -> "等待你的回答"
+                assistant?.phase == AssistantPhase.EXECUTING_TOOL -> assistant.toolCalls?.firstOrNull { it.status == ToolCallStatus.RUNNING }?.let { com.kernelai.app.ui.screen.chat.toolPurpose(it) } ?: "正在执行工具"
+                assistant?.phase == AssistantPhase.PREPARING_TOOL -> "正在准备工具调用"
+                assistant?.phase == AssistantPhase.THINKING -> "正在思考或等待重试"
+                state.streaming -> "正在生成回复"
+                assistant?.phase == AssistantPhase.FAILED -> "查看对话中的错误详情"
+                else -> "点按返回对话"
+            }
+            val title = manager?.sessionsFlow?.value?.firstOrNull { it.id == activeId }?.title ?: "轻微 AI"
+            runCatching { KernelAiApplication.instance.reportAgentTask(com.kernelai.app.ai.AgentTask(state.streaming, title, phase,
+                state.question != null, when (assistant?.phase) { AssistantPhase.FAILED -> "failed"; AssistantPhase.CANCELLED -> "cancelled"; else -> "done" })) }
+                .onFailure { error = "后台任务服务未能启动：${it.message}"; _uiState.value = _uiState.value.copy(error = error) }
+        }
         scheduleSave()
     }
     fun updateCatalog(value: ProviderCatalog, managed: Boolean = false) { requireCatalog = managed; catalog = value; applySessionConfig() }
@@ -187,13 +205,14 @@ class ChatViewModel(
         if (requireCatalog && catalog.providers.none { p -> p.id == state.providerId && p.models.any { it.id == state.modelId } }) {
             reportError("请先添加供应商并选择模型"); return
         }
-        if (state.question != null) { if (ensureManager().answer(activeId, text)) { state.input = ""; publish() }; return }
+        if (state.question != null) { if (ensureManager().answer(activeId, text)) { state.input = ""; state.followLatestRequest++; publish() }; return }
         if (text.isEmpty() && state.attachments.isEmpty()) {
-            if (!state.streaming && state.queued.isNotEmpty()) { state.streaming = true; ensureManager().resumeQueued(activeId); publish() }
+            if (!state.streaming && state.queued.isNotEmpty()) { state.streaming = true; state.followLatestRequest++; ensureManager().resumeQueued(activeId); publish() }
             return
         }
         if (state.attachments.any { it.isImage } && !config.supportsImages) { reportError("当前模型未启用图像支持，请选择图像模型或在模型配置中启用"); return }
         val attachments = state.attachments
+        state.followLatestRequest++
         state.attachments = emptyList()
         error = null
         state.input = ""
@@ -205,18 +224,19 @@ class ChatViewModel(
         publish()
         ensureManager().sendMessage(text, activeId, attachments)
     }
-    fun answerQuestion(text: String) { if (manager?.answer(activeId, text) == true) cache[activeId]?.question = null; publish() }
+    fun answerQuestion(text: String) { if (manager?.answer(activeId, text) == true) cache[activeId]?.let { it.question = null; it.followLatestRequest++ }; publish() }
     fun interruptAndSend() {
         val state = cache[activeId] ?: return
         val text = state.input.trim(); val attachments = state.attachments
         if (text.isBlank() && attachments.isEmpty()) return
         if (attachments.any { it.isImage } && !config.supportsImages) { reportError("当前模型未启用图像支持"); return }
+        state.followLatestRequest++
         stopStreaming(); state.question = null; state.input = ""; state.attachments = emptyList(); state.streaming = true
         ensureManager().sendMessage(text, activeId, attachments); publish()
     }
     fun stopStreaming() {
         manager?.cancelGeneration()
-        cache[activeId]?.let { finishAssistant(it); it.streaming = false; it.question = null }
+        cache[activeId]?.let { if (it.streaming) finishAssistant(it, AssistantPhase.CANCELLED); it.streaming = false; it.question = null }
         publish()
     }
     fun newSession() {

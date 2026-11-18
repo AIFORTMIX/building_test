@@ -7,4 +7,5 @@ interface DriverDevice {
     fun open(): Boolean
     fun close()
     fun ioctl(command: Int, arg: ByteArray): Int
+    fun processSnapshot(pid: Int): ProcessSnapshot = ProcessInspector().read(pid)
 }

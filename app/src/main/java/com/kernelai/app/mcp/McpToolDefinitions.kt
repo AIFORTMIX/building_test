@@ -170,7 +170,11 @@ object McpToolDefinitions {
             putJsonObject("properties") {
                 base["properties"]?.jsonObject?.forEach { (key, value) -> put(key, value) }
                 putJsonObject("_purpose") { put("type", "string"); put("description", "用简短中文说明这次调用是为了做什么，供执行卡片展示"); put("maxLength", 160) }
+                if (tool.name in ProcessGuard.TARGET_TOOLS) putJsonObject("expected_identity") {
+                    put("type", "string"); put("description", "来自 process_status 的 process_identity；禁止用新身份搭配旧地址"); put("maxLength", 80)
+                }
             }
+            if (tool.name in ProcessGuard.ADDRESS_TOOLS) put("required", JsonArray((base["required"]?.jsonArray.orEmpty() + JsonPrimitive("expected_identity")).distinct()))
         }
     }
 }

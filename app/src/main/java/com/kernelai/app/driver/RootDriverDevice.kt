@@ -109,4 +109,13 @@ class RootDriverDevice(context: Context) : DriverDevice {
             return -OsConstants.EIO
         }
     }
+    override fun processSnapshot(pid: Int): ProcessSnapshot {
+        require(pid > 0)
+        return try {
+            val remote = binding?.remote ?: return ProcessSnapshot(pid, "unavailable", detail = "Root 服务未连接")
+            val raw = remote.processSnapshot(pid)
+            require(raw.length <= 8192) { "进程状态响应过大" }
+            kotlinx.serialization.json.Json.decodeFromString(ProcessSnapshot.serializer(), raw).also { require(it.pid == pid) }
+        } catch (error: Exception) { ProcessSnapshot(pid, "unavailable", detail = "Root 进程状态查询失败：${error.message}") }
+    }
 }

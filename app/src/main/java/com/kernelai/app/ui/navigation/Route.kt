@@ -12,6 +12,9 @@ import kotlinx.serialization.Serializable
 sealed interface Route : NavKey, Parcelable {
     @Parcelize
     @Serializable
+    data object Workspace : Route
+    @Parcelize
+    @Serializable
     data object Models : Route
     @Parcelize
     @Serializable

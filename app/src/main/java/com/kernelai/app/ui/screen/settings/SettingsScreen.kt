@@ -15,11 +15,25 @@ import com.kernelai.app.data.model.*
 import com.kernelai.app.ui.components.TextButton
 import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun SettingsScreen(scrollState: ScrollState = rememberScrollState(), connectionStatus: ConnectionStatus = ConnectionStatus(),
-    appSettings: AppSettings = AppSettings(), onManageModels: () -> Unit = {}, onOpenAudit: () -> Unit = {}, onThemeModeChange: (ThemeMode) -> Unit = {},
+    appSettings: AppSettings = AppSettings(), onManageModels: () -> Unit = {}, onOpenAudit: () -> Unit = {}, onOpenWorkspace: () -> Unit = {}, onThemeModeChange: (ThemeMode) -> Unit = {},
     onReconnectDriver: () -> Unit = {}, onToggleMcp: () -> Unit = {}) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val task by com.kernelai.app.KernelAiApplication.instance.agentTask.collectAsStateWithLifecycle()
+    var notifications by remember { mutableStateOf(androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()) }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event -> if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) notifications = androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled() }
+        lifecycle.addObserver(observer); onDispose { lifecycle.removeObserver(observer) }
+    }
     Column(Modifier.fillMaxSize().verticalScroll(scrollState).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         Text("设置", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         Card { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -37,6 +51,21 @@ fun SettingsScreen(scrollState: ScrollState = rememberScrollState(), connectionS
             connectionStatus.errorMessage?.let { Text(it, color = MiuixTheme.colorScheme.error) }
         } }
         McpAccessPanel(onOpenAudit)
+        Card { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("工作区文件", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text("选择允许 AI 读取、创建和修改文件的目录。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            TextButton(onClick = onOpenWorkspace) { Text("管理工作区 →") }
+        } }
+        Card { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("AI 后台任务", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text(if (task.active) task.detail else "生成期间可切到后台；任务结束后释放后台运行资源。", fontSize = 13.sp)
+            Text(if (notifications) "任务通知已允许，可从通知返回对话或停止任务" else "通知未允许，开启后可在后台查看任务状态", fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            Row {
+                TextButton(onClick = { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)) }) { Text("通知设置") }
+                if (task.active) TextButton(onClick = { com.kernelai.app.KernelAiApplication.instance.agentViewModel.stopStreaming() }) { Text("停止任务") }
+            }
+        } }
         Card { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("外观", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             Text("Miuix · 玻璃悬浮组件", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
