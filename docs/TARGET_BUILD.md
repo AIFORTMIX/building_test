@@ -60,6 +60,8 @@ Kleaf 外部模块接口或经典 build.sh 流程。下一步运行完整 Linux 
 CRC/release 校验，不通过改写模块版本串或 CRC 替代 ABI 验证。
 # 2026-11-18 构建版本信息修正
 
+后续运行 44146552447 已恢复 Git 和构建标签，余下差异为上游固定的 12 位 Git 缩写与目标镜像的 13 位缩写。工作流使用 `kernel_workspace_status.py` 包装上游 workspace status，只调整 common 的 Git 缩写长度，且必须同时匹配实际 40 位 HEAD、原始 stamp 和目标 release 中的 Git 片段。保留 dirty 标记、其他项目元数据、时间戳及构建标签。该脚本和哈希进入构建溯源产物，4 项回归覆盖正确缩写、错误源码拒绝和 dirty 保留。
+
 Actions 44142501274 已完成模块编译，62 个版本符号的 CRC 全部匹配目标 Image；交付阶段因 `6.1.138-android14-11-maybe-dirty` 与目标完整 release 不同而失败。
 
 Kleaf 默认关闭 stamping 时会生成 `-maybe-dirty`。工作流现在显式启用 `--config=stamp`，通过固定的 common 提交生成 Git 后缀，并将原始 Image 的构建标签设为 `BUILD_NUMBER=10023717-4k`。这是在源码构建阶段重建版本标签，CRC 参考文件、编译完成的 ELF 和最终校验均不改写。该标签及 release/CRC 匹配不证明签名、完整 ABI 或设备运行安全。其他目标应填写其原始构建标签或清空 `kernel_build_number`。

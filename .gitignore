@@ -19,6 +19,7 @@ __pycache__/
 .kotlin/
 .idea/
 **/build/
+!tests/build/
 **/.cxx/
 local.properties
 *.jks

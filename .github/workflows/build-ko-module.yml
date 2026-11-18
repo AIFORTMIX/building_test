@@ -250,7 +250,7 @@ jobs:
       ABK_KO_EXPECTED_RELEASE: ${{ inputs.expected_kernel_release }}
       ABK_KO_KERNEL_COMMIT: ${{ inputs.kernel_commit }}
       BUILD_NUMBER: ${{ inputs.kernel_build_number }}
-      ABK_KO_BAZEL_ARGS_JSON: '["--config=stamp"]'
+      ABK_KO_BAZEL_ARGS_JSON: '["--config=stamp", "--workspace_status_command=./qw_workspace_status.py"]'
 
     steps:
       - name: Checkout
@@ -441,6 +441,10 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x scripts/build_external_ko.sh
+          cp scripts/kernel_workspace_status.py "$KERNEL_ROOT/qw_workspace_status.py"
+          chmod +x "$KERNEL_ROOT/qw_workspace_status.py"
+          cp scripts/kernel_workspace_status.py "$GITHUB_WORKSPACE/ko-provenance/$CONFIG/kernel_workspace_status.py"
+          sha256sum scripts/kernel_workspace_status.py > "$GITHUB_WORKSPACE/ko-provenance/$CONFIG/workspace-status.sha256"
           out_dir="$GITHUB_WORKSPACE/ko-output/${{ matrix.android_version }}-${{ matrix.kernel_version }}.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
           scripts/build_external_ko.sh \
             --kernel-root "$KERNEL_ROOT" \
@@ -450,6 +454,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/ko-provenance/$CONFIG/resolved-manifest.xml" "$out_dir/"
           git -C "$KERNEL_ROOT/common" status --short > "$out_dir/kernel-git-status.txt"
           git -C "$KERNEL_ROOT/common" diff --binary > "$out_dir/kernel-source.patch"
+          cp scripts/kernel_workspace_status.py "$out_dir/kernel_workspace_status.py"
           echo "ABK_KO_OUTPUT_DIR=$out_dir" >> "$GITHUB_ENV"
 
       - name: 写入目标信息
@@ -466,6 +471,7 @@ jobs:
             echo "validation_scope=构建和请求的 release/CRC 检查；完整 ABI、签名、CFI 及真机稳定性仍需验证"
             echo "build_number=$BUILD_NUMBER"
             echo "kleaf_stamping=--config=stamp"
+            echo "git_abbreviation=validated source prefix from expected release; dirty markers preserved"
           } >> "$ABK_KO_OUTPUT_DIR/target.txt"
 
       - name: 上传 KO 模块产物
@@ -491,6 +497,8 @@ jobs:
           name: "${{ inputs.module_name }}-${{ matrix.android_version }}-${{ matrix.kernel_version }}.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}-diagnostics"
           path: |
             ko-output/**/build.log
+            ko-provenance/**/kernel_workspace_status.py
+            ko-provenance/**/workspace-status.sha256
             ko-output/**/abi-report.json
             ko-output/**/source-manifest.json
             ko-provenance/**/source-sync.log
