@@ -250,7 +250,7 @@ jobs:
       ABK_KO_EXPECTED_RELEASE: ${{ inputs.expected_kernel_release }}
       ABK_KO_KERNEL_COMMIT: ${{ inputs.kernel_commit }}
       BUILD_NUMBER: ${{ inputs.kernel_build_number }}
-      ABK_KO_BAZEL_ARGS_JSON: '["--config=stamp", "--workspace_status_command=./qw_workspace_status.py"]'
+      ABK_KO_BAZEL_ARGS_JSON: '["--config=stamp"]'
 
     steps:
       - name: Checkout
@@ -445,6 +445,10 @@ jobs:
           chmod +x "$KERNEL_ROOT/qw_workspace_status.py"
           cp scripts/kernel_workspace_status.py "$GITHUB_WORKSPACE/ko-provenance/$CONFIG/kernel_workspace_status.py"
           sha256sum scripts/kernel_workspace_status.py > "$GITHUB_WORKSPACE/ko-provenance/$CONFIG/workspace-status.sha256"
+          # Bazel may normalize ./ away; use an absolute command and validate it before compiling.
+          export ABK_KO_BAZEL_ARGS_JSON
+          ABK_KO_BAZEL_ARGS_JSON=$(python3 -c 'import json,os; print(json.dumps(["--config=stamp", "--workspace_status_command=" + os.path.join(os.environ["KERNEL_ROOT"], "qw_workspace_status.py")]))')
+          python3 "$KERNEL_ROOT/qw_workspace_status.py" > "$GITHUB_WORKSPACE/ko-provenance/$CONFIG/workspace-status.txt"
           out_dir="$GITHUB_WORKSPACE/ko-output/${{ matrix.android_version }}-${{ matrix.kernel_version }}.${{ matrix.sub_level }}-${{ matrix.os_patch_level }}"
           scripts/build_external_ko.sh \
             --kernel-root "$KERNEL_ROOT" \
@@ -455,6 +459,7 @@ jobs:
           git -C "$KERNEL_ROOT/common" status --short > "$out_dir/kernel-git-status.txt"
           git -C "$KERNEL_ROOT/common" diff --binary > "$out_dir/kernel-source.patch"
           cp scripts/kernel_workspace_status.py "$out_dir/kernel_workspace_status.py"
+          cp "$GITHUB_WORKSPACE/ko-provenance/$CONFIG/workspace-status.txt" "$out_dir/"
           echo "ABK_KO_OUTPUT_DIR=$out_dir" >> "$GITHUB_ENV"
 
       - name: 写入目标信息
@@ -499,6 +504,7 @@ jobs:
             ko-output/**/build.log
             ko-provenance/**/kernel_workspace_status.py
             ko-provenance/**/workspace-status.sha256
+            ko-provenance/**/workspace-status.txt
             ko-output/**/abi-report.json
             ko-output/**/source-manifest.json
             ko-provenance/**/source-sync.log

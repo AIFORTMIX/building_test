@@ -1,6 +1,10 @@
 import json
+import os
 from pathlib import Path
 import sys
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -35,6 +39,27 @@ class KernelStampTests(unittest.TestCase):
 
     def test_generic_build_keeps_upstream_metadata(self):
         self.assertEqual(self.fixture(), update_status(self.fixture(), self.head, ""))
+
+    @unittest.skipIf(os.name == "nt", "Exec/shebang integration runs on the Linux Actions runner")
+    def test_absolute_command_finds_kernel_root_from_another_working_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            common = root / "common"
+            common.mkdir()
+            subprocess.run(["git", "init", "-q", str(common)], check=True)
+            subprocess.run(["git", "-C", str(common), "-c", "user.name=CI", "-c", "user.email=ci@example.invalid",
+                            "commit", "-q", "--allow-empty", "-m", "fixture"], check=True)
+            head = subprocess.check_output(["git", "-C", str(common), "rev-parse", "HEAD"], text=True).strip()
+            script = root / "build/kernel/kleaf/workspace_status.sh"
+            script.parent.mkdir(parents=True)
+            original = 'STABLE_SCMVERSIONS ' + json.dumps({"common": "-g" + head[:12]})
+            script.write_text("#!/bin/bash\nprintf '%s\\n' '" + original + "'\n", encoding="utf-8")
+            wrapper = root / "qw_workspace_status.py"
+            shutil.copy2(Path(__file__).resolve().parents[2] / "scripts/kernel_workspace_status.py", wrapper)
+            wrapper.chmod(0o755)
+            env = dict(os.environ, ABK_KO_EXPECTED_RELEASE="6.1.138-android14-11-g" + head[:13])
+            result = subprocess.check_output([str(wrapper)], cwd="/", env=env, text=True)
+            self.assertEqual("-g" + head[:13], json.loads(result.split(" ", 1)[1])["common"])
 
 
 if __name__ == "__main__":

@@ -40,7 +40,8 @@ def update_status(status: str, head: str, expected_release: str) -> str:
 
 
 def main() -> None:
-    root = Path.cwd()
+    root = Path(__file__).resolve().parent
+    os.chdir(root)
     result = subprocess.run(["bash", "build/kernel/kleaf/workspace_status.sh"],
                             check=True, capture_output=True, text=True)
     sys.stderr.write(result.stderr)
