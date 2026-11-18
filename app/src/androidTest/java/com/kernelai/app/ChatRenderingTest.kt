@@ -141,13 +141,19 @@ class ChatRenderingTest {
         ui.onNodeWithTag("chat-messages").performScrollToIndex(0)
         ui.onNodeWithTag("chat-messages").performTouchInput { swipeUp() }
         ui.waitForIdle()
-        val before = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+        val before = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config
+        val anchorId = before[ChatAnchorMessage]
+        val anchorOffset = before[ChatAnchorOffset]
         ui.onNodeWithText("新对话").performClick()
+        // Exercise a cold renderer cache as well as the saved LazyListState.
+        ui.runOnIdle { repeat(50) { MarkdownDocument.parse("缓存淘汰 $it") } }
         ui.onNodeWithText("新会话").performClick()
         ui.onNodeWithText("阅读位置测试").performClick()
+        ui.waitUntil(10_000) { ui.onAllNodesWithTag("chat-messages").fetchSemanticsNodes().isNotEmpty() }
         ui.waitForIdle()
-        val after = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
-        Assert.assertEquals(before, after, .02f)
+        val after = ui.onNodeWithTag("chat-messages").fetchSemanticsNode().config
+        Assert.assertEquals(anchorId, after[ChatAnchorMessage])
+        Assert.assertEquals(anchorOffset, after[ChatAnchorOffset])
         Assert.assertEquals(1, api.requestCount)
     }
 }

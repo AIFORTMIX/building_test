@@ -62,6 +62,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -80,8 +82,13 @@ import com.kernelai.app.ui.viewmodel.ChatViewModel
 import com.kernelai.app.ui.viewmodel.ChatUiState
 import com.kernelai.app.ai.AiChatManager
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.conflate
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+val ChatAnchorMessage = SemanticsPropertyKey<String>("ChatAnchorMessage")
+val ChatAnchorOffset = SemanticsPropertyKey<Int>("ChatAnchorOffset")
 
 /**
  * AI 聊天界面 - 支持消息气泡、Markdown 渲染、工具调用指示器、连接状态
@@ -145,11 +152,28 @@ private fun ConversationBar(sessions: List<AiChatManager.SessionInfo>, activeId:
 
 @Composable
 private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
+    val visibleMessages = remember(state.messages) { state.messages.filterNot { it.role == MessageRole.TOOL } }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex =
-        (state.messages.lastIndex + if (state.hasOlderMessages) 1 else 0).coerceAtLeast(0))
+        (visibleMessages.lastIndex + if (state.hasOlderMessages) 1 else 0).coerceAtLeast(0))
     var following by rememberSaveable { mutableStateOf(true) }
     val dragged by listState.interactionSource.collectIsDraggedAsState()
-    val visibleMessages = remember(state.messages) { state.messages.filterNot { it.role == MessageRole.TOOL } }
+    // Resolve the restored viewport before laying it out. Raw Markdown has a different
+    // height and must not replace a saved long-message anchor for one frame.
+    var restoredContentReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        val anchor = (listState.firstVisibleItemIndex - if (state.hasOlderMessages) 1 else 0).coerceAtLeast(0)
+        val viewport = visibleMessages.drop(anchor).take(2)
+        withContext(Dispatchers.Default) {
+            viewport.filter { it.role == MessageRole.ASSISTANT && !it.isStreaming }.forEach { MarkdownDocument.parse(it.content) }
+        }
+        restoredContentReady = true
+    }
+    if (!restoredContentReady) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(Modifier.size(24.dp))
+        }
+        return
+    }
     val latest by rememberUpdatedState(state)
     val latestDragged by rememberUpdatedState(dragged)
     suspend fun scrollToBottom() {
@@ -176,7 +200,11 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit) {
             }
     }
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize().testTag("chat-messages"), state = listState,
+        LazyColumn(Modifier.fillMaxSize().testTag("chat-messages").semantics {
+            val index = listState.firstVisibleItemIndex - if (state.hasOlderMessages) 1 else 0
+            this[ChatAnchorMessage] = visibleMessages.getOrNull(index)?.id ?: "load-older"
+            this[ChatAnchorOffset] = listState.firstVisibleItemScrollOffset
+        }, state = listState,
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (state.hasOlderMessages) item(key = "load-older") {

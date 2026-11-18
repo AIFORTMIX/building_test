@@ -32,7 +32,8 @@ private val markdownDispatcher = Dispatchers.Default.limitedParallelism(2)
 /** Native text only: no WebView, Javascript, HTML execution or automatic remote-image requests. */
 @Composable
 fun MarkdownMessage(source: String, streaming: Boolean, textColor: Color, modifier: Modifier = Modifier) {
-    var blocks by remember { mutableStateOf<List<MdBlock>?>(null) }
+    var blocks by remember { mutableStateOf(MarkdownDocument.cached(source)
+        ?: if (source.length > MarkdownDocument.MAX_SOURCE_CHARS) MarkdownDocument.parse(source) else null) }
     // A steady-rate worker keeps up with token streams without parsing once per network chunk.
     val latest by rememberUpdatedState(source)
     LaunchedEffect(streaming) {
@@ -51,7 +52,7 @@ fun MarkdownMessage(source: String, streaming: Boolean, textColor: Color, modifi
     SelectionContainer(modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             val document = blocks
-            if (document == null) Text(source, color = textColor, fontSize = 15.sp, lineHeight = 23.sp)
+            if (document == null) Text("正在加载内容…", color = textColor, fontSize = 13.sp, lineHeight = 23.sp)
             else MarkdownBlocks(document, textColor)
         }
     }

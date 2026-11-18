@@ -45,12 +45,14 @@ object MarkdownDocument {
     private var cachedChars = 0
 
     /** Called on a worker dispatcher; the weighted LRU avoids reparsing completed messages on switch. */
-    @Synchronized fun parse(source: String): List<MdBlock> {
-        cache[source]?.let { return it }
+    fun cached(source: String): List<MdBlock>? = synchronized(cache) { cache[source] }
+
+    fun parse(source: String): List<MdBlock> {
+        cached(source)?.let { return it }
         if (source.length > MAX_SOURCE_CHARS) return listOf(MdBlock.Literal(
             source.take(MAX_SOURCE_CHARS) + "\n\n[内容较长，仅预览前 $MAX_SOURCE_CHARS 字；可复制完整消息]"))
         val result = try {
-            val root = parser.parse(source)
+            val root = synchronized(parser) { parser.parse(source) }
             // Walk iteratively before recursive conversion/composition, bounding adversarial nesting.
             val pending = ArrayDeque<Pair<Node, Int>>()
             pending.add(root to 0)
@@ -66,12 +68,15 @@ object MarkdownDocument {
         } catch (_: IllegalArgumentException) {
             listOf(MdBlock.Literal(source))
         }
-        cache[source] = result
-        cachedChars += source.length
-        while (cache.size > 48 || cachedChars > CACHE_CHARS) {
-            val first = cache.entries.iterator().next()
-            cachedChars -= first.key.length
-            cache.remove(first.key)
+        synchronized(cache) {
+            cache[source]?.let { return it }
+            cache[source] = result
+            cachedChars += source.length
+            while (cache.size > 48 || cachedChars > CACHE_CHARS) {
+                val first = cache.entries.iterator().next()
+                cachedChars -= first.key.length
+                cache.remove(first.key)
+            }
         }
         return result
     }
