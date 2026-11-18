@@ -8,6 +8,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Box
@@ -23,6 +24,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
@@ -162,20 +165,22 @@ class MainActivity : ComponentActivity() {
                             ),
                             onBack = { navigator.pop() },
                             entryProvider = entryProvider {
-                                entry<Route.McpAudit> { McpAuditScreen { navigator.pop() } }
-                                entry<Route.Models> { ModelsScreen(modelsViewModel) { navigator.pop() } }
+                                entry<Route.McpAudit> { StandalonePage { McpAuditScreen { navigator.pop() } } }
+                                entry<Route.Models> { StandalonePage { ModelsScreen(modelsViewModel) { navigator.pop() } } }
                                 entry<Route.Main> { mainScreenEntry() }
                                 entry<Route.Chat> { mainScreenEntry() }
                                 entry<Route.Settings> { mainScreenEntry() }
                                 entry<Route.ProcessBrowser> { mainScreenEntry() }
                                 entry<Route.BreakpointManager> { mainScreenEntry() }
-                                entry<Route.MemoryViewer> { MemoryScreen() }
-                                entry<Route.DisasmViewer> { DisasmScreen() }
+                                entry<Route.MemoryViewer> { StandalonePage { MemoryScreen() } }
+                                entry<Route.DisasmViewer> { StandalonePage { DisasmScreen() } }
                                 entry<Route.LogViewer> {
+                                    StandalonePage {
                                     LogScreen(
                                         logEntries = logEntries,
                                         onClear = { driverViewModel.clearLogs() }
                                     )
+                                    }
                                 }
                             }
                         )
@@ -191,6 +196,13 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
     }
+}
+
+/** Detail routes do not use the main pager's inset-aware scaffold. */
+@Composable
+private fun StandalonePage(content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)
+        .windowInsetsPadding(WindowInsets.safeDrawing)) { content() }
 }
 
 /**
