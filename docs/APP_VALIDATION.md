@@ -1,6 +1,6 @@
 # App 构建与模拟联调
 
-[Actions 44246704569](https://github.com/AIFORTMIX/building_test/actions/runs/44246704569) 全部通过：Debug/Release 构建、32 项单元测试、5 项 API 35 模拟器检查以及 Lint（0 错误、63 警告）。本地 API 37.1 / 16 KiB 模拟器检查也通过。Release 包未签名，调试包可用于测试安装。
+[Actions 44249554219](https://github.com/AIFORTMIX/building_test/actions/runs/44249554219) 全部通过：Debug/Release 构建、33 项单元测试、5 项 API 35 模拟器检查以及 Lint（0 错误、63 警告）。本地 API 37.1 / 16 KiB 模拟器检查也通过。Release 包未签名，调试包可用于测试安装。
 
 本轮使用本地 HTTP/SSE 模拟响应，不调用任何真实 AI 服务，不需要 API 密钥。手机未连接，因此没有验证真机 Root IPC、驱动装载和设备上的实际 ioctl。
 

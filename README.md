@@ -3,7 +3,7 @@
 本仓库用于通过 GitHub Actions 编译 Qingwei ARM64 内核模块，并检查生成模块
 是否匹配所提供手机镜像的导出符号 CRC 和完整 kernel release。
 
-2026-11-18 验证通过：[驱动构建](https://github.com/AIFORTMIX/building_test/actions/runs/44245345141)完整 release 和 62 项版本符号 CRC 匹配；[App 构建与联调](https://github.com/AIFORTMIX/building_test/actions/runs/44246704569)通过 32 项单元测试及 5 项 Android 模拟器检查。两次运行的 Artifacts 提供 KO、APK、校验报告和截图。尚未进行实体手机或真实 AI 服务测试。
+2026-11-18 验证通过：[驱动构建](https://github.com/AIFORTMIX/building_test/actions/runs/44245345141)完整 release 和 62 项版本符号 CRC 匹配；[App 构建与联调](https://github.com/AIFORTMIX/building_test/actions/runs/44249554219)通过 33 项单元测试及 5 项 Android 模拟器检查。两次运行的 Artifacts 提供 KO、APK、校验报告和截图。尚未进行实体手机或真实 AI 服务测试。
 
 App 已加入本仓库。推送 App 改动后，[App 构建和模拟联调](https://github.com/AIFORTMIX/building_test/actions/workflows/build-app.yml) 自动编译 APK 并运行模拟 AI → MCP → 测试设备链路及 Android 界面检查。无需真实 AI 密钥或手机。Markdown、会话加载和可展开执行详情的行为及当前限制见 [App 验证说明](docs/APP_VALIDATION.md)。
 
