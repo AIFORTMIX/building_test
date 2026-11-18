@@ -131,6 +131,23 @@ class AiMcpIntegrationTest {
         assertEquals("普通 JSON 🙂", events.filterIsInstance<ChatEvent.StreamingText>().joinToString("") { it.delta })
         assertEquals(0, driver.calls.get())
     }
+    @Test fun oversizedJsonToolListIsRejectedBeforeAnyUiToolEventsOrIoctl() = runBlocking {
+        val body = buildJsonObject { putJsonArray("choices") { addJsonObject {
+            putJsonObject("message") {
+                put("role", "assistant"); put("content", JsonNull)
+                putJsonArray("tool_calls") { repeat(33) { index -> addJsonObject {
+                    put("id", "call_$index"); put("type", "function")
+                    putJsonObject("function") { put("name", "process_list"); put("arguments", "{}") }
+                } } }
+            }
+            put("finish_reason", "tool_calls")
+        } } }
+        api.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(body.toString()))
+        val events = converse(manager())
+        assertTrue(events.any { it is ChatEvent.Error })
+        assertTrue(events.none { it is ChatEvent.ToolCallStreaming || it is ChatEvent.ToolCallsStarting })
+        assertEquals(0, driver.calls.get())
+    }
     @Test fun multilineSseCrOnlyAndBomAreDecoded() = runBlocking {
         val body = "\uFEFF: keepalive\r\rdata: {\"choices\":[\rdata: {\"delta\":{\"content\":\"中文🙂\"},\"finish_reason\":null}]}\r\r" +
             chunk(buildJsonObject {}, "stop").replace("\n", "\r")

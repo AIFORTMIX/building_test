@@ -450,7 +450,9 @@ class OpenAiClient(
         val content = (msgObj["content"]?.takeIf { it !is JsonNull }
             ?: msgObj["refusal"]?.takeIf { it !is JsonNull })?.jsonPrimitive?.content
 
-        val toolCalls = msgObj["tool_calls"]?.jsonArray?.map { tcElem ->
+        val rawCalls = msgObj["tool_calls"]?.jsonArray
+        require((rawCalls?.size ?: 0) <= AiChatManager.MAX_TOOL_CALLS_PER_RESPONSE) { "工具调用数量超出限制" }
+        val toolCalls = rawCalls?.map { tcElem ->
             val tc = tcElem.jsonObject
             ApiToolCall(
                 id = tc["id"]?.jsonPrimitive?.content ?: "",
@@ -494,6 +496,7 @@ class OpenAiClient(
             when (event) {
                 is StreamEvent.ContentDelta -> contentBuilder.append(event.delta)
                 is StreamEvent.ToolCallDelta -> {
+                    require(event.index in 0 until AiChatManager.MAX_TOOL_CALLS_PER_RESPONSE) { "工具调用 index 超出范围" }
                     val acc = toolCallAccumulators.getOrPut(event.index) {
                         ToolCallAccumulator(event.index)
                     }
