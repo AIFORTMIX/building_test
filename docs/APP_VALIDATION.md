@@ -1,5 +1,9 @@
 # 0.3.0 本地验证（2026-11-19）
 
+最终云端 [Actions 44459100460](https://github.com/AIFORTMIX/building_test/actions/runs/44459100460) 全部通过，App 源码提交 `b12c1f8`：Linux 85 项 host 回归（0 skipped）、API 35 的 21 项 Android UI/JNI，以及 Debug/Release/Lint。正式 APK 已独立核验 0.3.0 / 300 和固定签名，SHA256 为 `6652dee6cf04de22dcd00437cc5333377ea8a9268abeab1adecad7237cdc3a56`，证书 SHA256 为 `9b22114432e135bf70c8909c8965fc4733eabe822c6e8fee5b7157a703ecca5d`。APK、完整报告和截图在本地 `outputs/app-validation-2026-11-19/actions-44459100460/`，便于安装的副本为 `outputs/qingwei-0.3.0.apk`。
+
+Release 包通过模拟服务走完 AI → 内置 MCP → 工作区创建/读取/版本编辑，并核对返回的真实文件内容；随后验证流式图片保持预览、产物卡完成布局后跟随到末尾、上滑后再次发送恢复跟随。全屏图片、实际视频播放、音频控制、全屏 Markdown/文本，以及 1.3 倍字体和横屏布局已在模拟器实际操作，未发现本轮 App FATAL/ANR。云端正式包覆盖安装成功，原会话及模型配置保留。本段不代表真机 KO 或长期压力验收。
+
 本次按用户提供的《通用 UI 视觉设计指南》实施 Miuix 中性色、统一间距与圆角、沉浸式全宽模糊顶栏、共享毛玻璃覆盖层和低性能降级；没有引入 Material 主题。
 
 - 固定签名 Debug/Release、Lint 与 JNI ABI 检查通过。85 项 host 回归无失败；Windows 因系统不允许创建符号链接而跳过 1 项，对应符号链接越界检查在 Android 实际通过，并保留 Linux CI 检查。Lint 为 0 errors / 71 warnings，主要为依赖版本、资源、样式建议。

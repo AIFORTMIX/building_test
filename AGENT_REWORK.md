@@ -12,6 +12,8 @@
 
 当前版本 0.3.0 / 300，操作说明见 docs/AGENT_APP.md，验证范围见 docs/APP_VALIDATION.md。真机 KO、系统厂商后台策略和长期内存压力需要继续在手机验证。
 
+最终 App 源码 `b12c1f8`，Actions 44459100460 全部通过：85 项 host（Linux 无跳过）和 21 项 Android 检查。固定签名正式包已下载核验版本/签名/SHA256并覆盖安装；Release 模拟 AI、内置 MCP、工作区和流式媒体跟随联调通过。
+
 # 0.2.0 历史授权改造（2026-11-18）
 
 统一使用 Miuix，参考用户提供的两张图及 ccch1mneyyy/dsh-Go 的会话、模型和附件交互。
