@@ -56,8 +56,25 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk app-artifacts/qingwei-debug.apk
           cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk app-artifacts/qingwei-android-test.apk
           python3 - <<'PY'
-          import json, shutil
+          import json, os, re, shutil, subprocess
           from pathlib import Path
+          properties = dict(line.strip().split('=', 1) for line in Path('gradle.properties').read_text().splitlines() if '=' in line and not line.lstrip().startswith('#'))
+          expected = (int(properties['kernelai.version.code']), properties['kernelai.version.name'])
+          aapt = sorted(Path(os.environ['ANDROID_HOME'], 'build-tools').glob('*/aapt2'))[-1]
+          for variant in ('debug', 'release'):
+              folder = Path(f'app/build/outputs/apk/{variant}')
+              output = json.loads((folder / 'output-metadata.json').read_text())
+              if any((item['versionCode'], item['versionName']) != expected for item in output['elements']):
+                  raise SystemExit(f'{variant} APK version does not match gradle.properties')
+              for item in output['elements']:
+                  apk = folder / item['outputFile']
+                  if not apk.resolve().is_relative_to(folder.resolve()):
+                      raise SystemExit('Unexpected APK path')
+                  badging = subprocess.check_output([str(aapt), 'dump', 'badging', str(apk)], text=True)
+                  code = re.search(r"versionCode='(\d+)'", badging)
+                  name = re.search(r"versionName='([^']*)'", badging)
+                  if not code or not name or (int(code[1]), name[1]) != expected:
+                      raise SystemExit(f'{variant} packaged manifest has an unexpected version')
           directory = Path('app/build/outputs/apk/release')
           metadata = json.loads((directory / 'output-metadata.json').read_text())
           name = metadata['elements'][0]['outputFile']
