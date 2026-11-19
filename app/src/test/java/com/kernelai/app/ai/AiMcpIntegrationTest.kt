@@ -142,6 +142,22 @@ class AiMcpIntegrationTest {
             assertEquals(1, driver.calls.get())
         } finally { collector.cancelAndJoin() }
     }
+    @Test fun cancellingDuringRetryClearsTheRetryIndicatorAndDoesNotSendAnotherRequest() = runBlocking {
+        api.enqueue(MockResponse().setResponseCode(503).setHeader("Retry-After", "5").setBody("overloaded"))
+        val vm = withContext(Dispatchers.Main) {
+            ChatViewModel(tools) {}.also {
+                stores.add(ViewModelStore().apply { put("retry", it) })
+                it.updateAiConfig(com.kernelai.app.data.model.AiConfig(config().baseUrl, model = "fixture-model"))
+                it.updateInputText("验证停止重试"); it.sendMessage()
+            }
+        }
+        withTimeout(10000) { while (vm.messages.value.lastOrNull()?.retry == null) delay(10) }
+        withContext(Dispatchers.Main) { vm.stopStreaming() }
+        withTimeout(5000) { while (vm.messages.value.lastOrNull()?.phase != com.kernelai.app.data.model.AssistantPhase.CANCELLED) delay(10) }
+        assertFalse(vm.isStreaming.value)
+        assertNull(vm.messages.value.last().retry)
+        assertEquals(1, api.requestCount)
+    }
     @Test fun appConversationWorkspaceScopeRejectsCrossWorkspaceWritesBeforeDispatch() = runBlocking {
         val calls = AtomicInteger()
         val delegate = object : McpToolExecutor {

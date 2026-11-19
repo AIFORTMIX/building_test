@@ -89,7 +89,7 @@ class ChatViewModel(
                         manager?.restoreSession(saved.id, saved.title, saved.createdAt, saved.history, partial)
                         manager?.restoreQueued(saved.id, saved.queued)
                         cache[saved.id] = SessionUi(messages = saved.messages.map { message ->
-                            message.copy(isStreaming = false, phase = if (message.isStreaming) AssistantPhase.CANCELLED else message.phase,
+                            message.copy(isStreaming = false, retry = null, phase = if (message.isStreaming) AssistantPhase.CANCELLED else message.phase,
                                 toolCalls = message.toolCalls?.map { call -> if (call.status in listOf(ToolCallStatus.RUNNING, ToolCallStatus.PENDING)) call.copy(status = ToolCallStatus.CANCELLED) else call })
                         }, input = saved.draft, attachments = saved.attachments, providerId = saved.providerId, modelId = saved.modelId, usage = saved.usage, queued = saved.queued,
                             usageTotals = saved.usageTotals, workspaceId = saved.workspaceId)
@@ -297,7 +297,7 @@ class ChatViewModel(
         if (id != null) state.messages = state.messages.map { if (it.id == id) transform(it) else it }
     }
     private fun finishAssistant(state: SessionUi, phase: AssistantPhase? = null) {
-        update(state, state.assistantId) { it.copy(isStreaming = false, phase = phase ?: it.phase) }
+        update(state, state.assistantId) { it.copy(isStreaming = false, retry = null, phase = phase ?: it.phase) }
     }
     private fun handleEvent(state: SessionUi, event: ChatEvent) {
         when (event) {

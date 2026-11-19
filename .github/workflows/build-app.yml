@@ -3,9 +3,9 @@ name: Build app and test simulated AI-MCP chain
 on:
   push:
     branches: [main]
-    paths: ['app/**', 'gradle/**', '*.gradle.kts', 'gradle.properties', 'gradlew*', 'tests/abi/**', '.github/workflows/build-app.yml', 'scripts/run_android_smoke.sh']
+    paths: ['app/**', 'gradle/**', '*.gradle.kts', 'gradle.properties', 'gradlew*', 'tests/abi/**', '.github/workflows/build-app.yml', 'scripts/run_android_smoke.sh', 'scripts/check_compose_alignment.py']
   pull_request:
-    paths: ['app/**', 'gradle/**', '*.gradle.kts', 'gradle.properties', 'gradlew*', 'tests/abi/**', '.github/workflows/build-app.yml', 'scripts/run_android_smoke.sh']
+    paths: ['app/**', 'gradle/**', '*.gradle.kts', 'gradle.properties', 'gradlew*', 'tests/abi/**', '.github/workflows/build-app.yml', 'scripts/run_android_smoke.sh', 'scripts/check_compose_alignment.py']
   workflow_dispatch:
 
 permissions:
@@ -50,6 +50,7 @@ jobs:
           chmod +x gradlew
           ./gradlew :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug --console=plain -Pqingwei.abis=arm64-v8a,x86_64
           python3 tests/abi/check_abi.py
+          python3 scripts/check_compose_alignment.py app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
       - name: Prepare downloadable APKs
         run: |
           mkdir -p app-artifacts

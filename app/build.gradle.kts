@@ -154,7 +154,9 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.12.0-alpha03")
+    // Match Miuix's resolved AndroidX runtime/UI. An alpha test runtime beside
+    // stable app classes can corrupt SlotTable when an Activity is disposed.
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.11.2")
     androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 
     // Miuix UI 组件库
