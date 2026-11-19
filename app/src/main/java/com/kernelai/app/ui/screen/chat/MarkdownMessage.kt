@@ -70,7 +70,7 @@ fun MarkdownMessage(source: String, streaming: Boolean, textColor: Color, modifi
 }
 
 @Composable
-private fun MarkdownBlocks(blocks: List<MdBlock>, color: Color, streaming: Boolean = false) {
+private fun MarkdownBlocks(blocks: List<MdBlock>, color: Color, streaming: Boolean = false, path: String = "") {
     blocks.forEachIndexed { index, block -> key(index, block::class) { when (block) {
         is MdBlock.Paragraph -> {
             val size = when (block.level) { 1 -> 25; 2 -> 22; 3 -> 20; 4 -> 18; 5 -> 16; else -> 15 }
@@ -78,7 +78,7 @@ private fun MarkdownBlocks(blocks: List<MdBlock>, color: Color, streaming: Boole
                 val parts = remember(block.text) { paragraphParts(block.text) }
                 parts.forEachIndexed { partIndex, part -> key(partIndex, part::class) {
                     when (part) {
-                        is ParagraphPart.Picture -> InlinePicture(part.image)
+                        is ParagraphPart.Picture -> InlinePicture(part.image, "$path/$index/$partIndex")
                         is ParagraphPart.TextRun -> {
                             val text = inlineText(part.items, color)
                             var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -93,13 +93,13 @@ private fun MarkdownBlocks(blocks: List<MdBlock>, color: Color, streaming: Boole
         is MdBlock.Quote -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
             Spacer(Modifier.width(3.dp).fillMaxHeight().background(color.copy(alpha = .35f)))
             Column(Modifier.padding(start = 12.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                MarkdownBlocks(block.blocks, color.copy(alpha = .85f), streaming && index == blocks.lastIndex)
+                MarkdownBlocks(block.blocks, color.copy(alpha = .85f), streaming && index == blocks.lastIndex, "$path/$index/q")
             }
         }
         is MdBlock.ListBlock -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            block.items.forEach { item -> Row(Modifier.fillMaxWidth()) {
+            block.items.forEachIndexed { itemIndex, item -> Row(Modifier.fillMaxWidth()) {
                 Text(item.marker, color = color, fontSize = 15.sp, lineHeight = 23.sp, modifier = Modifier.widthIn(min = 28.dp).padding(end = 6.dp))
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { MarkdownBlocks(item.blocks, color, streaming && index == blocks.lastIndex && item == block.items.last()) }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { MarkdownBlocks(item.blocks, color, streaming && index == blocks.lastIndex && itemIndex == block.items.lastIndex, "$path/$index/l$itemIndex") }
             } }
         }
         is MdBlock.Code -> {
@@ -110,7 +110,7 @@ private fun MarkdownBlocks(blocks: List<MdBlock>, color: Color, streaming: Boole
                 if (expanded) CodeBlock(block, color)
             } else CodeBlock(block, color)
         }
-        is MdBlock.Table -> MarkdownTable(block, color)
+        is MdBlock.Table -> MarkdownTable(block, color, "$path/$index")
         is MdBlock.Literal -> Text(block.text, color = color, fontSize = 14.sp, lineHeight = 22.sp)
         MdBlock.Rule -> HorizontalDivider(Modifier.padding(vertical = 4.dp), color = color.copy(alpha = .25f))
     } } }
@@ -132,14 +132,14 @@ private fun CodeBlock(block: MdBlock.Code, color: Color) {
 }
 
 @Composable
-private fun MarkdownTable(table: MdBlock.Table, color: Color) {
+private fun MarkdownTable(table: MdBlock.Table, color: Color, path: String) {
     Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-        table.rows.forEach { row -> Row(Modifier.height(IntrinsicSize.Min)) {
-            row.forEach { cell -> Column(Modifier.width(168.dp).fillMaxHeight()
+        table.rows.forEachIndexed { rowIndex, row -> Row(Modifier.height(IntrinsicSize.Min)) {
+            row.forEachIndexed { cellIndex, cell -> Column(Modifier.width(168.dp).fillMaxHeight()
                 .background(if (cell.header) color.copy(alpha = .08f) else Color.Transparent)
                 .border(.5.dp, color.copy(alpha = .2f)).padding(10.dp)) {
-                paragraphParts(cell.text).forEach { part -> when (part) {
-                is ParagraphPart.Picture -> InlinePicture(part.image)
+                paragraphParts(cell.text).forEachIndexed { partIndex, part -> when (part) {
+                is ParagraphPart.Picture -> InlinePicture(part.image, "$path/t$rowIndex:$cellIndex/$partIndex")
                 is ParagraphPart.TextRun -> Text(inlineText(part.items, color), color = color, fontSize = 14.sp, lineHeight = 21.sp,
                     fontWeight = if (cell.header) FontWeight.SemiBold else FontWeight.Normal,
                     textAlign = when (cell.alignment) { TableCell.Alignment.CENTER -> TextAlign.Center; TableCell.Alignment.RIGHT -> TextAlign.End; else -> TextAlign.Start },

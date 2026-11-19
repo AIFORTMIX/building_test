@@ -7,7 +7,8 @@
 - [x] App 级任务生命周期、后台前台服务、任务/完成通知和通知停止入口。
 - [x] Markdown 图片直接预览、视频首帧、音频控件，全屏图像/媒体/文本/Markdown 与 App 内网页。
 - [x] 应用内/系统授权工作区管理，6 项 MCP 文件工具，路径边界、UTF-8/大小限制、版本校验和精确编辑。
-- [x] 本地 84 项 host（Windows 跳过 1 项符号链接创建，Android 对应检查通过）、20 项 Android UI/JNI、Debug/Release/Lint/ABI 通过；真实 SAF 目录读写编辑额外验收通过。
+- [x] 本地 85 项 host（Windows 跳过 1 项符号链接创建，Android 对应检查通过）、21 项 Android UI/JNI、Debug/Release/Lint/ABI 通过；真实 SAF 目录读写编辑额外验收通过。
+- [x] 流式结束后的产物卡布局继续锚定最新位置，图片预算按出现位置计数，修复重复解析后的预览退化；APK 实际版本与版本配置强制核对。
 
 当前版本 0.3.0 / 300，操作说明见 docs/AGENT_APP.md，验证范围见 docs/APP_VALIDATION.md。真机 KO、系统厂商后台策略和长期内存压力需要继续在手机验证。
 

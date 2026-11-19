@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -76,7 +77,7 @@ internal fun RemoteArtifactCard(artifact: ArtifactLink) {
     var busy by remember { mutableStateOf(false) }; var status by remember { mutableStateOf<String?>(null) }
     var saved by remember { mutableStateOf<File?>(ArtifactFiles.cached(context.filesDir, artifact).takeIf { it.isFile && it.length() > 0 }) }
     fun open() = com.kernelai.app.ui.preview.ArtifactPreview.open(context, artifact.url, artifact.title, kind)
-    Card(Modifier.fillMaxWidth()) {
+    Card(Modifier.fillMaxWidth().testTag("artifact-${artifact.url}")) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Text(artifact.extension.uppercase() + "  ·  产物", fontSize = 12.sp, color = MiuixTheme.colorScheme.primary)
             Text(artifact.title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)

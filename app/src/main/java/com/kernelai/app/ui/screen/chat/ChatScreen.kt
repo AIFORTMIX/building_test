@@ -387,9 +387,6 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit, bo
         listState.interactionSource.interactions.collect { if (it is DragInteraction.Start) following = false }
     }
     LaunchedEffect(listState, following) {
-        var previousTail: Pair<String?, Int>? = null
-        var wasGenerating = false
-        var settleUntil = 0L
         snapshotFlow {
             val tail = latest.messages.lastOrNull()
             val layout = listState.layoutInfo
@@ -400,11 +397,9 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit, bo
                 // layoutInfo can emit inside a measure pass. Suspend before scrolling so
                 // scrollToItem cannot force a nested measure while that pass is active.
                 delay(80)
-                val tail = latest.messages.lastOrNull()
-                val signature = tail?.id to (tail?.content?.length ?: 0)
-                if (signature != previousTail || (wasGenerating && !latest.isStreaming)) settleUntil = System.nanoTime() + 600_000_000L
-                previousTail = signature; wasGenerating = latest.isStreaming
-                if (following && (latest.isStreaming || rendering || System.nanoTime() < settleUntil) && !latestDragged && !listState.isScrollInProgress) scrollToBottom()
+                // Keep the latest edge anchored through final Markdown/artifact layout as well.
+                // User drags revoke following; completed output must not rely on a time window.
+                if (following && !latestDragged && !listState.isScrollInProgress) scrollToBottom()
             }
     }
     Box(Modifier.fillMaxSize()) {
