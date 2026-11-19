@@ -1,5 +1,9 @@
 # 0.4.0 本地验证（2026-11-19）
 
+最终云端 [Actions 44551789205](https://github.com/AIFORTMIX/building_test/actions/runs/44551789205) 全部通过，App 源码为 `67b8c40`：Linux 103 项 host 回归（0 skipped）、API 35 的 26 项 Android UI/JNI、Debug/Release/Lint，以及实际 APK 的 Compose 版本一致性检查。正式包独立核验为 `0.4.0 / 400`，SHA256 为 `fe747caed6ce5873a97a356bf40fb3e2c423daa0b66311802faecb7ceeea36ec`，固定证书不变。安装包与报告在本地 `outputs/app-validation-2026-11-19/actions-44551789205/`，安装副本为 `outputs/qingwei-0.4.0.apk`，旁有 `.sha256` 文件。
+
+最终云端 R8 APK 覆盖安装后，原会话、供应商和工作区数据保留；再次以模拟服务完成 AI → HTTP MCP → 工作区创建/读取/哈希校验编辑 → 流式正文及实际 usage 的完整链路，确认思考字段在后续模型请求中回传。另已验证 20,174 字符的工具结果完整归档、AI 检索首段以外的尾部，以及完整结果界面翻页读取尾部；正式包取消重试及重试期间重开 App 均清除旧状态而不自动重放。深色模式和 1.3 倍字体下实际检查用量面板可读、无布局遮挡，最近验收日志未见 App FATAL/ANR。截图、链路日志及 `VALIDATION.json` 随本地报告归档。
+
 版本为 `0.4.0 / 400`。本地 Debug、固定签名 R8 Release、Android 测试 APK 和 Lint 构建通过；已用 aapt2 检查正式 APK 内的实际版本，证书 SHA256 仍为 `9b22114432e135bf70c8909c8965fc4733eabe822c6e8fee5b7157a703ecca5d`。Lint 为 0 errors / 77 warnings。未改 KO、JNI 或 ioctl ABI，20 个打包结构和 24 条 ioctl 检查通过，工作流 actionlint 通过。
 
 103 项 host 回归无失败，Windows 因符号链接权限跳过 1 项；26 项实际 Android UI/JNI 检查全部通过。新增覆盖真实服务商 reasoning 字段及回传、五次重试上限/Retry-After/额度错误/部分输出保留、取消重试清除状态条、手动重试不重复执行已完成工具、会话工作区越界拦截、Unicode 完整结果分页/搜索/持久化与显式清理、慢操作任务句柄不重放、Root proc 源分页越过原列表上限及进程/映射版本变化、正文不随工具折叠、思考展开及完成后收起、用量面板、fenced Markdown 直接渲染。
