@@ -51,7 +51,7 @@ fun FilterChip(selected: Boolean, onClick: () -> Unit, label: @Composable () -> 
 
 @Composable
 fun DropdownMenu(expanded: Boolean, onDismissRequest: () -> Unit, content: @Composable () -> Unit) {
-    if (LocalGlassBackdrop.current != null) {
+    if (LocalGlassBackdrop.current != null || LocalPanelBackdrop.current != null) {
         GlassDialog(expanded, onDismissRequest) { Column { content() } }
         return
     }
@@ -70,7 +70,7 @@ fun DropdownMenuItem(text: @Composable () -> Unit, onClick: () -> Unit) {
 @Composable
 fun AlertDialog(onDismissRequest: () -> Unit, title: @Composable () -> Unit, text: @Composable () -> Unit,
     confirmButton: @Composable () -> Unit, dismissButton: @Composable () -> Unit) {
-    if (LocalGlassBackdrop.current != null) {
+    if (LocalGlassBackdrop.current != null || LocalPanelBackdrop.current != null) {
         GlassDialog(true, onDismissRequest) {
             title(); text()
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { dismissButton(); confirmButton() }

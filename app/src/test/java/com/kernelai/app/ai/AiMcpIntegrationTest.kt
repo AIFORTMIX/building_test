@@ -124,6 +124,39 @@ class AiMcpIntegrationTest {
         assertEquals(listOf(MessageRole.USER, MessageRole.ASSISTANT, MessageRole.TOOL, MessageRole.ASSISTANT), vm.messages.value.map { it.role })
         assertEquals(ToolCallStatus.COMPLETED, vm.messages.value.first { it.role == MessageRole.TOOL }.toolCalls!!.single().status)
     }
+    @Test fun manualRetryKeepsCompletedToolReceiptsWithoutExecutingTheToolAgain() = runBlocking {
+        api.enqueue(response(toolResponse())); api.enqueue(MockResponse().setResponseCode(401).setBody("invalid_api_key"))
+        val manager = manager()
+        assertTrue(converse(manager).any { it is ChatEvent.Error })
+        assertEquals(1, driver.calls.get())
+        assertEquals(listOf("system", "user", "assistant", "tool"), withContext(Dispatchers.Main) { manager.getMessages().map { it.role } })
+        api.enqueue(response(text("沿用已经完成的查询结果")))
+        val done = CompletableDeferred<Unit>()
+        val collector = launch(Dispatchers.Main, start = CoroutineStart.UNDISPATCHED) { manager.chatEvents.collect { if (it == ChatEvent.GenerationComplete) done.complete(Unit) } }
+        try {
+            withContext(Dispatchers.Main) { manager.retryLastRequest(manager.getActiveSessionId()) }
+            withTimeout(15000) { done.await() }
+            nextRequest(); nextRequest()
+            val history = nextRequest()["messages"]!!.jsonArray
+            assertEquals("Request roles: " + history.map { it.jsonObject["role"] }, 1, history.count { it.jsonObject["role"] == JsonPrimitive("tool") })
+            assertEquals(1, driver.calls.get())
+        } finally { collector.cancelAndJoin() }
+    }
+    @Test fun appConversationWorkspaceScopeRejectsCrossWorkspaceWritesBeforeDispatch() = runBlocking {
+        val calls = AtomicInteger()
+        val delegate = object : McpToolExecutor {
+            override fun getToolDefinitions() = listOf(McpToolExecutor.ToolDefinition("workspace_write_file", "fixture", buildJsonObject { put("type", "object") }))
+            override suspend fun executeTool(name: String, arguments: JsonObject): String { calls.incrementAndGet(); return "{\"saved\":true}" }
+        }
+        api.enqueue(response(toolDelta(0, "call_scope", "workspace_write_file", "{\"workspace_id\":\"other\",\"path\":\"a.txt\",\"content\":\"x\"}") + chunk(buildJsonObject {}, "tool_calls") + "data: [DONE]\n\n"))
+        api.enqueue(response(text("请先选择正确的工作区")))
+        val manager = AiChatManager(OpenAiClient(config()), delegate, config(), workspaceScope = { "selected" }).also { managers.add(it) }
+        val events = converse(manager)
+        assertTrue(events.filterIsInstance<ChatEvent.ToolCallResult>().single().isError)
+        assertEquals(0, calls.get())
+        val first = nextRequest()["messages"]!!.jsonArray.first().jsonObject["content"]!!.jsonPrimitive.content
+        assertTrue(first.contains("selected"))
+    }
     @Test fun jsonResponseToStreamingRequestIsHandled() = runBlocking {
         api.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
             """{"choices":[{"message":{"role":"assistant","content":"普通 JSON 🙂"},"finish_reason":"stop"}]}"""))

@@ -29,7 +29,7 @@ import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import com.kernelai.app.ui.components.OutlinedTextField
-import top.yukonga.miuix.kmp.basic.Surface
+import com.kernelai.app.ui.components.FrostedSurface as Surface
 import top.yukonga.miuix.kmp.basic.Text
 import com.kernelai.app.ui.components.TextButton
 import androidx.compose.runtime.Composable

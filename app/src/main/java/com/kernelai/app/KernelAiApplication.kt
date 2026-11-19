@@ -20,6 +20,7 @@ class KernelAiApplication : Application(), androidx.lifecycle.ViewModelStoreOwne
     val chatStore by lazy { com.kernelai.app.data.ChatStore(java.io.File(filesDir, "conversations/chats.json")) }
     val providerStore by lazy { com.kernelai.app.data.ProviderStore(java.io.File(filesDir, "providers.enc")) }
     val workspaceRepository by lazy { com.kernelai.app.data.WorkspaceRepository(this) }
+    val toolResultStore by lazy { com.kernelai.app.mcp.ToolResultStore(java.io.File(filesDir, "artifacts/tool-results")) }
     lateinit var deviceNode: DriverDevice
         private set
     lateinit var mcpRuntime: McpRuntime
@@ -34,11 +35,16 @@ class KernelAiApplication : Application(), androidx.lifecycle.ViewModelStoreOwne
         super.onCreate()
         instance = this
         deviceNode = RootDriverDevice(this)
-        mcpRuntime = McpRuntime(com.kernelai.app.mcp.CompositeToolExecutor(McpToolExecutorImpl(deviceNode), com.kernelai.app.mcp.WorkspaceTools(workspaceRepository)), com.kernelai.app.mcp.McpAuditTrail(java.io.File(filesDir, "mcp-audit.json")))
-        aiToolExecutor = McpHttpToolExecutor(mcpRuntime::endpoint, com.kernelai.app.mcp.WorkspaceTools(workspaceRepository).getToolDefinitions())
+        mcpRuntime = McpRuntime(com.kernelai.app.mcp.McpTaskDispatcher(com.kernelai.app.mcp.PagedToolExecutor(com.kernelai.app.mcp.CompositeToolExecutor(McpToolExecutorImpl(deviceNode), com.kernelai.app.mcp.ProcRecordsTools(deviceNode), com.kernelai.app.mcp.WorkspaceTools(workspaceRepository)), toolResultStore)), com.kernelai.app.mcp.McpAuditTrail(java.io.File(filesDir, "mcp-audit.json")))
+        aiToolExecutor = McpHttpToolExecutor(mcpRuntime::endpoint, com.kernelai.app.mcp.WorkspaceTools(workspaceRepository).getToolDefinitions() + com.kernelai.app.mcp.PagedToolExecutor.definition + com.kernelai.app.mcp.McpTaskDispatcher.definition + com.kernelai.app.mcp.ProcRecordsTools.definition)
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             private var started = 0
-            override fun onActivityStarted(activity: android.app.Activity) { started++; uiVisible = started > 0 }
+            override fun onActivityStarted(activity: android.app.Activity) {
+                started++; uiVisible = started > 0
+                if (!com.kernelai.app.mcp.McpHostService.running.value && !com.kernelai.app.mcp.McpHostService.busy.value) {
+                    runCatching { com.kernelai.app.mcp.McpHostService.restore(this@KernelAiApplication) }
+                }
+            }
             override fun onActivityStopped(activity: android.app.Activity) { started = (started - 1).coerceAtLeast(0); uiVisible = started > 0 }
             override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}
             override fun onActivityResumed(activity: android.app.Activity) {}

@@ -14,12 +14,18 @@ internal class WorkspaceDocuments(private val resolver: ContentResolver, private
     private fun uri(id: String) = Docs.buildDocumentUriUsingTree(tree, id)
     private val columns = arrayOf(Docs.Document.COLUMN_DOCUMENT_ID, Docs.Document.COLUMN_DISPLAY_NAME,
         Docs.Document.COLUMN_MIME_TYPE, Docs.Document.COLUMN_SIZE, Docs.Document.COLUMN_FLAGS)
-    private fun children(id: String): Pair<List<Node>, Boolean> {
+    private fun children(id: String, offset: Int = 0, limit: Int = 500, matching: String? = null): Pair<List<Node>, Boolean> {
         val result = mutableListOf<Node>()
+        var skipped = 0; var scanned = 0
         resolver.query(Docs.buildChildDocumentsUriUsingTree(tree, id), columns, null, null, null)?.use { cursor ->
             while (cursor.moveToNext()) {
+                if (++scanned > 1000000) error("目录过大，不能确认同名文件是否唯一")
+                val name = cursor.getString(1).orEmpty()
+                if (name.startsWith(".qingwei-") && matching == null) continue
+                if (matching != null && name != matching) continue
+                if (skipped++ < offset) continue
                 result.add(Node(cursor.getString(0), cursor.getString(1).orEmpty(), cursor.getString(2).orEmpty(), if (cursor.isNull(3)) -1 else cursor.getLong(3), cursor.getInt(4)))
-                if (result.size > 500) return result.take(500) to true
+                if (result.size > limit) return result.take(limit) to true
             }
         } ?: error("工作区目录无法读取，系统授权可能已失效")
         return result to false
@@ -28,15 +34,16 @@ internal class WorkspaceDocuments(private val resolver: ContentResolver, private
         var node = Node(rootId, "", Docs.Document.MIME_TYPE_DIR, 0, 0)
         parts.forEach { name ->
             require(node.directory) { "父路径不是目录" }
-            val (entries, truncated) = children(node.id)
-            require(!truncated) { "目录超过 500 项，不能完整解析文件名，请选择更小的工作区目录" }
+            val (entries, truncated) = children(node.id, limit = 2, matching = name)
+            require(!truncated) { "文件名称不唯一" }
             node = entries.filter { it.name == name }.singleOrNull() ?: error("文件或目录不存在，或名称不唯一：$name")
         }
         return node
     }
-    override fun list(path: String): Pair<List<WorkspaceEntry>, Boolean> {
+    override fun list(path: String, offset: Int, limit: Int): Pair<List<WorkspaceEntry>, Boolean> {
+        require(offset in 0..1000000 && limit in 1..500)
         val directory = locate(WorkspacePaths.parts(path, true)); require(directory.directory)
-        val (entries, more) = children(directory.id)
+        val (entries, more) = children(directory.id, offset, limit)
         return entries.filterNot { it.name.startsWith(".qingwei-") }.map { WorkspaceEntry(it.name, it.directory, it.size) } to more
     }
     private fun bytes(id: String): ByteArray = resolver.openInputStream(uri(id))?.use { input ->
@@ -54,7 +61,7 @@ internal class WorkspaceDocuments(private val resolver: ContentResolver, private
     override fun mkdir(path: String) {
         var id = rootId
         WorkspacePaths.parts(path).forEach { name ->
-            val (entries, more) = children(id); require(!more)
+            val (entries, more) = children(id, limit = 2, matching = name); require(!more)
             val existing = entries.filter { it.name == name }
             require(existing.size <= 1)
             id = if (existing.isEmpty()) Docs.getDocumentId(Docs.createDocument(resolver, uri(id), Docs.Document.MIME_TYPE_DIR, name) ?: error("目录创建失败"))
@@ -64,7 +71,7 @@ internal class WorkspaceDocuments(private val resolver: ContentResolver, private
     override fun write(path: String, bytes: ByteArray, expectedHash: String?, overwrite: Boolean) {
         require(bytes.size <= WorkspacePaths.MAX_TEXT)
         val parts = WorkspacePaths.parts(path); val name = parts.last(); val parent = locate(parts.dropLast(1))
-        val (entries, more) = children(parent.id); require(!more)
+        val (entries, more) = children(parent.id, limit = 2, matching = name); require(!more)
         val matches = entries.filter { it.name == name }; require(matches.size <= 1)
         val old = matches.singleOrNull(); require(old?.directory != true)
         val original = old?.let { this.bytes(it.id) }
@@ -84,7 +91,7 @@ internal class WorkspaceDocuments(private val resolver: ContentResolver, private
                 backupAttempted = true
                 backup = Docs.renameDocument(resolver, uri(old.id), backupName) ?: error("备份原文件结果未确认")
             }
-            val (current, incomplete) = children(parent.id)
+            val (current, incomplete) = children(parent.id, limit = 2, matching = name)
             require(!incomplete && current.none { it.name == name }) { "workspace_conflict：提交前出现同名文件" }
             commitAttempted = true
             renamed = Docs.renameDocument(resolver, temporary, name) ?: error("新文件提交结果未确认")
@@ -93,7 +100,7 @@ internal class WorkspaceDocuments(private val resolver: ContentResolver, private
             backup?.let { runCatching { Docs.deleteDocument(resolver, it) } }
         } catch (error: Exception) {
             if (backup != null && !commitAttempted) runCatching {
-                val (current, incomplete) = children(parent.id)
+                val (current, incomplete) = children(parent.id, limit = 2, matching = name)
                 if (!incomplete && current.none { it.name == name }) Docs.renameDocument(resolver, backup!!, name)
             }
             throw IllegalStateException(error.message + if (backupAttempted || commitAttempted) "；替换结果需核实，可能保留备份 $backupName，禁止自动重放写入" else "；原文件未覆盖", error)

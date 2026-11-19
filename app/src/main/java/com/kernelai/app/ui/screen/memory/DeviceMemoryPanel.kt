@@ -1,5 +1,7 @@
 package com.kernelai.app.ui.screen.memory
 
+import com.kernelai.app.ui.components.GlassCard as Card
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer

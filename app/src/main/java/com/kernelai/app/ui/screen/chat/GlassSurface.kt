@@ -16,6 +16,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.*
 import androidx.compose.ui.unit.dp
 import com.kernelai.app.ui.LocalUiMode
 import com.kernelai.app.ui.UiMode
@@ -29,7 +31,7 @@ internal object GlassStyle {
     val Panel = 24.dp
     val Capsule = 32.dp
     const val BlurRadius = 22f
-    const val TintAlpha = .56f
+    const val TintAlpha = .68f
 }
 
 @Composable
@@ -55,10 +57,11 @@ internal fun GlassSurface(
     content: @Composable BoxScope.() -> Unit
 ) {
     val dark = chatBackground().luminance() < .4f
-    val supported = glassSupported() && backdrop != null
+    var bounded by remember { mutableStateOf(false) }
+    val supported = glassSupported() && backdrop != null && bounded
     val tint = if (dark) Color(0xFF24262D) else Color(0xFFF4F5F8)
     val blur = if (supported) Modifier.textureBlur(backdrop = backdrop, shape = shape, blurRadius = GlassStyle.BlurRadius) else Modifier
-    Box(modifier.shadow(10.dp, shape, ambientColor = Color.Black.copy(alpha = .08f), spotColor = Color.Black.copy(alpha = .10f))
+    Box(modifier.onSizeChanged { bounded = it.width in 1..4096 && it.height in 1..4096 }.shadow(10.dp, shape, ambientColor = Color.Black.copy(alpha = .08f), spotColor = Color.Black.copy(alpha = .10f))
         .then(blur).clip(shape)
         .background(tint.copy(alpha = if (supported || windowBlur) GlassStyle.TintAlpha else .96f))
         .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = if (dark) .26f else .95f),

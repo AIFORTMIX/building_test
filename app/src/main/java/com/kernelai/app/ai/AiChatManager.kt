@@ -15,7 +15,8 @@ import java.util.concurrent.ConcurrentHashMap
 class AiChatManager(
     private val client: OpenAiClient,
     private val toolExecutor: McpToolExecutor,
-    private var config: AiConfig = AiConfig()
+    private var config: AiConfig = AiConfig(),
+    private val workspaceScope: ((String) -> String?)? = null
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val sessions = ConcurrentHashMap<String, ChatSession>()
@@ -71,6 +72,13 @@ class AiChatManager(
         val id = sessionId ?: activeSessionId ?: return emptyList()
         return sessions[id]?.messages?.toList().orEmpty()
     }
+    internal fun requestHistory(sessionId: String): List<ApiChatMessage> {
+        val history = getMessages(sessionId).filterNot { it.role == "system" }.toMutableList()
+        val workspace = workspaceScope?.invoke(sessionId)
+        val system = config.systemPrompt + (if (workspaceScope != null) "\n当前会话工作区 ID（数据）：" + JsonPrimitive(workspace).toString() + "。文件工具只允许使用此 ID；未选择时先请用户选择。不要改用其他工作区。" else "")
+        if (system.isNotBlank()) history.add(0, ApiChatMessage("system", system))
+        return history
+    }
 
     fun restoreSession(id: String, title: String, createdAt: Long, messages: List<ApiChatMessage>, interruptedContent: String? = null) {
         val history = messages.toMutableList()
@@ -111,6 +119,10 @@ class AiChatManager(
     }
     fun restoreQueued(sessionId: String, messages: List<ApiChatMessage>) { steering[sessionId] = ArrayDeque(messages.take(8)) }
     fun resumeQueued(sessionId: String) { sessions[sessionId]?.let { session -> if (!steering[sessionId].isNullOrEmpty()) generate(session) } }
+    /** Retry only the failed model request; keep every completed tool call and receipt. */
+    fun retryLastRequest(sessionId: String) { sessions[sessionId]?.let { session ->
+        generate(session) { if (session.messages.lastOrNull()?.interrupted == true) session.messages.removeAt(session.messages.lastIndex) }
+    } }
     fun answer(sessionId: String, text: String): Boolean {
         if (text.isBlank() || text.length > 64000) return false
         return answers[sessionId]?.complete(text) == true
@@ -156,7 +168,8 @@ class AiChatManager(
                     }
                     throw error
                 } catch (error: Exception) {
-                    emit(session.id, ChatEvent.Error("生成失败: ${error.message}"))
+                    val failure = (error as? ProviderFailure)?.failure ?: AiFailure("client", "请求未完成", AiFailures.scrub(error.message.orEmpty()), "检查错误详情后重试本轮；已完成的工具结果保留。")
+                    emit(session.id, ChatEvent.Error(failure.message, failure))
                 } finally {
                     _isGenerating.value = false
                     publishSessions()
@@ -171,33 +184,48 @@ class AiChatManager(
             currentCoroutineContext().ensureActive()
             drainSteering(session)
             emit(session.id, ChatEvent.RequestStarted(index + 1))
-            val usage = ContextBudget.estimate(session.messages, tools)
+            val requestMessages = requestHistory(session.id)
+            val usage = ContextBudget.estimate(requestMessages, tools)
             emit(session.id, ChatEvent.UsageUpdated(usage))
             require(usage.promptTokens.toLong() + config.maxTokens <= config.contextWindow) { "估算上下文加输出额度超过模型窗口，请开启新对话、减少附件或调整模型上下文配置" }
             val accumulator = OpenAiClient.StreamAccumulator()
             var failed = false
-            try { client.streamChatCompletion(session.messages.toList(), tools).collect { event ->
+            var lastUsage: com.kernelai.app.data.model.ContextUsage? = null
+            try { client.streamChatCompletion(requestMessages, tools).collect { event ->
                 accumulator.process(event)
                 when (event) {
                     is StreamEvent.ContentDelta -> emit(session.id, ChatEvent.StreamingText(event.delta))
+                    is StreamEvent.ReasoningDelta -> emit(session.id, ChatEvent.StreamingReasoning(event.delta))
                     is StreamEvent.ToolCallDelta -> emit(session.id, ChatEvent.ToolCallStreaming(event.index, event.functionName, event.argumentsDelta))
-                    is StreamEvent.Usage -> emit(session.id, ChatEvent.UsageUpdated(event.usage))
-                    is StreamEvent.Retrying -> emit(session.id, ChatEvent.Retrying(event.attempt, event.delayMs))
-                    is StreamEvent.Error -> { failed = true; emit(session.id, ChatEvent.Error(event.message)) }
+                    is StreamEvent.Usage -> { lastUsage = event.usage; emit(session.id, ChatEvent.UsageUpdated(event.usage)) }
+                    is StreamEvent.Retrying -> {
+                        lastUsage?.let { emit(session.id, ChatEvent.UsageCommitted(it)) }; lastUsage = null
+                        emit(session.id, ChatEvent.Retrying(event.attempt, event.delayMs, event.maximum, event.failure))
+                    }
+                    is StreamEvent.Error -> { failed = true; emit(session.id, ChatEvent.Error(event.message, event.failure)) }
                     else -> Unit
                 }
             } } catch (error: CancellationException) {
                 // Keep partial text in this session's model history; incomplete tool calls never run.
-                val partial = accumulator.buildMessage().copy(toolCalls = null)
-                if (!partial.content.isNullOrBlank()) {
+                val partial = accumulator.buildMessage().copy(toolCalls = null, interrupted = true)
+                if (!partial.content.isNullOrBlank() || !partial.reasoningContent.isNullOrBlank()) {
                     session.messages.add(partial)
                     withContext(NonCancellable) { emit(session.id, ChatEvent.MessageAdded(partial)) }
                 }
                 throw error
+            } finally { lastUsage?.let { usage -> withContext(NonCancellable) { emit(session.id, ChatEvent.UsageCommitted(usage)) } } }
+            if (failed) {
+                val partial = accumulator.buildMessage().copy(toolCalls = null, interrupted = true)
+                if (!partial.content.isNullOrBlank() || !partial.reasoningContent.isNullOrBlank()) session.messages.add(partial)
+                return
             }
-            if (failed) return
             val assistant = accumulator.buildMessage()
             val calls = assistant.toolCalls.orEmpty()
+            if (assistant.content.isNullOrBlank() && calls.isEmpty()) {
+                if (!assistant.reasoningContent.isNullOrBlank()) session.messages.add(assistant.copy(interrupted = true))
+                val failure = AiFailure("empty_response", "服务商没有返回正文", "本轮只返回了思考内容或空响应", "检查模型最大输出额度和服务商兼容性，可重试本轮。", partialOutput = !assistant.reasoningContent.isNullOrEmpty())
+                emit(session.id, ChatEvent.Error(failure.message, failure)); return
+            }
             require(calls.size <= MAX_TOOL_CALLS_PER_RESPONSE) { "单轮工具调用过多" }
             session.messages.add(assistant)
             emit(session.id, ChatEvent.MessageAdded(assistant))
@@ -220,13 +248,25 @@ class AiChatManager(
             val args = Json.parseToJsonElement(call.function.arguments) as? JsonObject
                 ?: throw IllegalArgumentException("工具参数必须是 JSON 对象")
             if (call.function.name == "ask_user") askUser(session, call, args)
-            else withContext(Dispatchers.IO) { toolExecutor.executeTool(call.function.name, args) }
+            else {
+                if (workspaceScope != null && call.function.name.startsWith("workspace_") && call.function.name != "workspace_list") {
+                    val selected = workspaceScope.invoke(session.id)
+                    require(selected != null && args["workspace_id"]?.jsonPrimitive?.contentOrNull == selected) { "工作区与当前会话不一致，请使用用户选择的工作区" }
+                }
+                val raw = withContext(Dispatchers.IO) { toolExecutor.executeTool(call.function.name, args) }
+                if (workspaceScope != null && call.function.name == "workspace_list") {
+                    val all = Json.parseToJsonElement(raw).jsonObject
+                    JsonObject(all + ("workspaces" to JsonArray(all["workspaces"]?.jsonArray.orEmpty().filter { it.jsonObject["id"]?.jsonPrimitive?.contentOrNull == workspaceScope.invoke(session.id) }))).toString()
+                } else raw
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             failed = true
-            "Error executing tool '${call.function.name}': ${error.message}"
+            if (error is com.kernelai.app.mcp.McpToolFailure) error.result
+            else buildJsonObject { put("is_error", true); put("message", "Error executing tool '${call.function.name}': ${error.message}"); put("automatic_retry_safe", false) }.toString()
         }
+        failed = failed || runCatching { Json.parseToJsonElement(result).jsonObject["is_error"] == JsonPrimitive(true) }.getOrDefault(false)
         session.messages.add(ApiChatMessage("tool", result, toolCallId = call.id, name = call.function.name))
         emit(session.id, ChatEvent.ToolCallResult(call.id, call.function.name, result, failed,
             durationMs = (System.nanoTime() - started) / 1_000_000))
@@ -284,7 +324,8 @@ sealed class ChatEvent {
     data object QuestionClosed : ChatEvent()
     data class QueueUpdated(val messages: List<ApiChatMessage>) : ChatEvent()
     data class UsageUpdated(val usage: com.kernelai.app.data.model.ContextUsage) : ChatEvent()
-    data class Retrying(val attempt: Int, val delayMs: Long) : ChatEvent()
+    data class UsageCommitted(val usage: com.kernelai.app.data.model.ContextUsage) : ChatEvent()
+    data class Retrying(val attempt: Int, val delayMs: Long, val maximum: Int = 5, val failure: AiFailure? = null) : ChatEvent()
 
     /** 新消息已加入历史（用户消息或完成的 assistant 消息）。 */
     data class MessageAdded(val message: ApiChatMessage) : ChatEvent()
@@ -294,6 +335,7 @@ sealed class ChatEvent {
 
     /** 流式文本增量。UI 应将 [delta] 追加到当前 assistant 消息末尾。 */
     data class StreamingText(val delta: String) : ChatEvent()
+    data class StreamingReasoning(val delta: String) : ChatEvent()
 
     /** 工具调用参数正在流式传输（AI 正在生成工具调用参数）。 */
     data class ToolCallStreaming(
@@ -332,5 +374,5 @@ sealed class ChatEvent {
     data object SessionCleared : ChatEvent()
 
     /** 发生错误。 */
-    data class Error(val message: String) : ChatEvent()
+    data class Error(val message: String, val failure: AiFailure? = null) : ChatEvent()
 }

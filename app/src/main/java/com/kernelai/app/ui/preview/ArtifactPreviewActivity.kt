@@ -87,6 +87,7 @@ private fun PreviewScreen(source: String, title: String, kind: PreviewKind, loca
                 file == null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 kind == PreviewKind.IMAGE -> ZoomImage(file!!, Modifier.weight(1f))
                 kind == PreviewKind.LOCAL_HTML -> WebPreview(null, file, Modifier.weight(1f))
+                local && file!!.parentFile?.canonicalFile == File(context.filesDir, "artifacts/tool-results").canonicalFile -> ToolReceiptPreview(file!!, Modifier.weight(1f), close)
                 else -> TextFilePreview(file!!, kind == PreviewKind.MARKDOWN, Modifier.weight(1f))
             }
         }

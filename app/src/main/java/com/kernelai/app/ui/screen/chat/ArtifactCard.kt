@@ -1,5 +1,7 @@
 package com.kernelai.app.ui.screen.chat
 
+import com.kernelai.app.ui.components.GlassCard as Card
+
 import android.content.Intent
 import android.webkit.WebResourceRequest
 import android.webkit.WebView

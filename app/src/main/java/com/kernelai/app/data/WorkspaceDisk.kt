@@ -12,7 +12,7 @@ import java.util.UUID
 internal data class WorkspaceEntry(val name: String, val directory: Boolean, val size: Long)
 internal data class WorkspaceText(val content: String, val sha256: String, val bytes: Int)
 internal interface WorkspaceAccess {
-    fun list(path: String): Pair<List<WorkspaceEntry>, Boolean>
+    fun list(path: String, offset: Int = 0, limit: Int = 500): Pair<List<WorkspaceEntry>, Boolean>
     fun read(path: String): ByteArray
     fun write(path: String, bytes: ByteArray, expectedHash: String?, overwrite: Boolean)
     fun mkdir(path: String)
@@ -52,10 +52,11 @@ internal class WorkspaceDisk(private val root: File) : WorkspaceAccess {
         require(target.canonicalFile.toPath().startsWith(root.canonicalFile.toPath())) { "路径越出工作区" }
         return target
     }
-    override fun list(path: String): Pair<List<WorkspaceEntry>, Boolean> {
+    override fun list(path: String, offset: Int, limit: Int): Pair<List<WorkspaceEntry>, Boolean> {
+        require(offset in 0..1000000 && limit in 1..500)
         val directory = file(path, true); require(directory.isDirectory) { "目录不存在" }
-        val files = Files.newDirectoryStream(directory.toPath()).use { entries -> entries.asSequence().filterNot { it.fileName.toString().startsWith(".qingwei-") }.take(501).map { it.toFile() }.toList() }
-        return files.take(500).map { val link = Files.isSymbolicLink(it.toPath()); WorkspaceEntry(it.name, !link && it.isDirectory, if (!link && it.isFile) it.length() else 0) } to (files.size > 500)
+        val files = Files.newDirectoryStream(directory.toPath()).use { entries -> entries.asSequence().filterNot { it.fileName.toString().startsWith(".qingwei-") }.drop(offset).take(limit + 1).map { it.toFile() }.toList() }
+        return files.take(limit).map { val link = Files.isSymbolicLink(it.toPath()); WorkspaceEntry(it.name, !link && it.isDirectory, if (!link && it.isFile) it.length() else 0) } to (files.size > limit)
     }
     override fun read(path: String): ByteArray {
         val target = file(path); require(target.isFile && target.length() <= WorkspacePaths.MAX_TEXT) { "文件不存在或超过 256 KiB 文本上限" }

@@ -1,4 +1,14 @@
-# 0.3.0 本地验证（2026-11-19）
+# 0.4.0 本地验证（2026-11-19）
+
+版本为 `0.4.0 / 400`。本地 Debug、固定签名 R8 Release、Android 测试 APK 和 Lint 构建通过；已用 aapt2 检查正式 APK 内的实际版本，证书 SHA256 仍为 `9b22114432e135bf70c8909c8965fc4733eabe822c6e8fee5b7157a703ecca5d`。Lint 为 0 errors / 77 warnings。未改 KO、JNI 或 ioctl ABI，20 个打包结构和 24 条 ioctl 检查通过，工作流 actionlint 通过。
+
+102 项 host 回归无失败，Windows 因符号链接权限跳过 1 项；26 项实际 Android UI/JNI 检查全部通过。新增覆盖真实服务商 reasoning 字段及回传、五次重试上限/Retry-After/额度错误/部分输出保留、手动重试不重复执行已完成工具、会话工作区越界拦截、Unicode 完整结果分页/搜索/持久化与显式清理、慢操作任务句柄不重放、Root proc 源分页越过原列表上限及进程/映射版本变化、正文不随工具折叠、思考展开及完成后收起、用量面板、fenced Markdown 直接渲染。
+
+外部 MCP Android 测试验证关闭与重建 Activity 后仍可调用、监听恢复后端口/令牌一致、显式关闭释放保护且下次开启轮换令牌。额外退出测试运行器后，正常启动 App 再退至桌面，用电脑通过 ADB TCP 转发执行 8 次真实 HTTP 工具调用；终止测试 App 自身进程后，前台服务被系统恢复，同一端口/令牌仍可调用；临时设置电池优化豁免并强制深度 Doze 后再连续调用 5 次成功。调用仅用无设备副作用的地址计算，未触碰任何第三方进程。验收后恢复电池状态、豁免名单与端口转发，并关闭外部访问。证据在本地 `outputs/external-mcp-lifecycle.json`、测试日志及截图。
+
+这些结果限于模拟器、模拟 AI 和既有接口的假设备边界，未连接真机，未验证真机 KO、厂商省电策略、Wi-Fi 局域网或长期压力稳定性。强行停止 App 不属于自动恢复承诺，普通唤醒锁也不保证绕过 Doze；用户需按设置页面允许后台网络。静态反汇编和完整暂停/继续/单步调试本轮未实现，能力边界已在工具提示词及使用文档明确。
+
+## 0.3.0 历史验证（2026-11-19）
 
 最终云端 [Actions 44459100460](https://github.com/AIFORTMIX/building_test/actions/runs/44459100460) 全部通过，App 源码提交 `b12c1f8`：Linux 85 项 host 回归（0 skipped）、API 35 的 21 项 Android UI/JNI，以及 Debug/Release/Lint。正式 APK 已独立核验 0.3.0 / 300 和固定签名，SHA256 为 `6652dee6cf04de22dcd00437cc5333377ea8a9268abeab1adecad7237cdc3a56`，证书 SHA256 为 `9b22114432e135bf70c8909c8965fc4733eabe822c6e8fee5b7157a703ecca5d`。APK、完整报告和截图在本地 `outputs/app-validation-2026-11-19/actions-44459100460/`，便于安装的副本为 `outputs/qingwei-0.3.0.apk`。
 

@@ -1,5 +1,7 @@
 package com.kernelai.app.ui.screen.chat
 
+import com.kernelai.app.ui.components.GlassCard as Card
+
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable

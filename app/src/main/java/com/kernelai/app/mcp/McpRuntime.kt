@@ -8,7 +8,7 @@ class McpEndpoint(val url: String, val token: String) {
     override fun toString(): String = "McpEndpoint($url)"
 }
 
-/** Owns the integrated host; network exposure is opt-in and tokens rotate on restart. */
+/** Owns the integrated host; external credentials may be retained by the foreground host service. */
 data class McpHostState(val running: Boolean = false, val exposed: Boolean = false, val port: Int = -1)
 
 class McpRuntime(executor: McpToolExecutor, val audit: McpAuditTrail = McpAuditTrail()) {
@@ -26,13 +26,16 @@ class McpRuntime(executor: McpToolExecutor, val audit: McpAuditTrail = McpAuditT
     val port: Int @Synchronized get() = server?.listeningPort ?: -1
     @Synchronized fun endpoint(): McpEndpoint =
         currentEndpoint?.takeIf { isRunning } ?: error("MCP 服务尚未启动")
-    @Synchronized fun start(port: Int = 8080, expose: Boolean = false) {
+    /** Activity initialization can create a listener, but cannot reconfigure an existing one. */
+    @Synchronized fun ensureLocal(port: Int = 8080) { if (!isRunning) start(port, expose = false) }
+    @Synchronized fun start(port: Int = 8080, expose: Boolean = false, retainedExternalToken: String? = null) {
         require(port in 0..65535)
-        if (isRunning && _exposed.value == expose) return
+        require(retainedExternalToken == null || retainedExternalToken.length in 32..256)
+        if (isRunning && _exposed.value == expose && (retainedExternalToken == null || externalToken == retainedExternalToken)) return
         if (isRunning) stop()
         val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
-        val external = if (expose) Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) }) else null
+        val external = if (expose) retainedExternalToken ?: Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) }) else null
         val next = McpHttpServer(port, token, protocol, expose, external, audit)
         try { next.start(10_000, true) }
         catch (error: Exception) { next.stop(); throw error }

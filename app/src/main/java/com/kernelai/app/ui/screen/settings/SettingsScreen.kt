@@ -1,5 +1,7 @@
 package com.kernelai.app.ui.screen.settings
 
+import com.kernelai.app.ui.components.GlassCard as Card
+
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*

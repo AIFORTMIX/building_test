@@ -1,5 +1,7 @@
 package com.kernelai.app.ui.screen.settings
 
+import com.kernelai.app.ui.components.GlassCard as Card
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,13 +14,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import android.os.PowerManager
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import com.kernelai.app.KernelAiApplication
 import com.kernelai.app.mcp.*
 import com.kernelai.app.ui.components.TextButton
 import com.kernelai.app.ui.screen.chat.rememberChatCopy
 import top.yukonga.miuix.kmp.basic.*
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
+import com.kernelai.app.ui.screen.chat.GlassDialog as WindowDialog
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -30,7 +39,17 @@ fun McpAccessPanel(onOpenAudit: () -> Unit) {
     val entries by runtime.audit.entries.collectAsStateWithLifecycle()
     val error by McpHostService.error.collectAsStateWithLifecycle()
     val busy by McpHostService.busy.collectAsStateWithLifecycle()
+    val running by McpHostService.running.collectAsStateWithLifecycle()
+    val protectionOn by McpHostService.protection.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val power = remember { context.getSystemService(PowerManager::class.java) }
+    var exempt by remember { mutableStateOf(power.isIgnoringBatteryOptimizations(context.packageName)) }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) exempt = power.isIgnoringBatteryOptimizations(context.packageName) }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     val copy = rememberChatCopy()
     var switching by remember { mutableStateOf(false) }
     var uiError by remember { mutableStateOf<String?>(null) }
@@ -43,8 +62,15 @@ fun McpAccessPanel(onOpenAudit: () -> Unit) {
                 runCatching { McpHostService.setAccess(context, enabled) }.onFailure { uiError = it.message; switching = false }
             }, enabled = !switching && !busy, modifier = Modifier.testTag("mcp-exposure-switch"))
         }
-        Text("默认关闭。开启后监听设备 IPv4 网络接口，持令牌的客户端可调用设备工具；切换会重启服务并更新令牌。HTTP 无传输加密，请在可信网络使用。", fontSize = 12.sp)
+        Text("默认关闭。开启后监听设备 IPv4 网络接口，持令牌的客户端可调用设备工具。后台恢复保留端口和令牌；关闭后旧令牌失效。HTTP 无传输加密，请在可信网络使用。", fontSize = 12.sp)
         if (state.exposed) {
+            Text(if (running && protectionOn) "后台服务运行中 · 已保持 CPU 唤醒" else "后台服务正在恢复", fontSize = 12.sp)
+            Text(if (exempt) "电池优化：已允许后台运行" else "锁屏深度休眠可能暂停网络，请允许不受电池优化限制，并在系统设置允许自启动。", fontSize = 12.sp)
+            if (!exempt) TextButton(onClick = {
+                runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))) }
+                    .recoverCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }
+                    .onFailure { uiError = it.message }
+            }) { Text("允许后台网络运行") }
             runtime.externalUrls().forEach { url -> TextButton(onClick = { copy(url) }) { Text(url, fontSize = 12.sp) } }
             TextButton(onClick = { runCatching { copy("Bearer " + runtime.externalAccessToken()) } }) { Text("复制 Authorization 访问令牌") }
             Text("连接方式：Streamable HTTP · POST /mcp · Authorization: Bearer <令牌>", fontSize = 11.sp)

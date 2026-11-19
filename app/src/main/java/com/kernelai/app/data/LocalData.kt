@@ -45,7 +45,8 @@ data class ProviderCatalog(val providers: List<ProviderConfig> = emptyList(), va
 @Serializable
 data class SavedChat(val id: String, val title: String, val createdAt: Long, val history: List<ApiChatMessage>,
     val messages: List<ChatMessage>, val draft: String = "", val attachments: List<Attachment> = emptyList(),
-    val providerId: String = "", val modelId: String = "", val usage: ContextUsage? = null, val queued: List<ApiChatMessage> = emptyList())
+    val providerId: String = "", val modelId: String = "", val usage: ContextUsage? = null, val queued: List<ApiChatMessage> = emptyList(),
+    val usageTotals: UsageTotals = UsageTotals(), val workspaceId: String = "default")
 @Serializable
 data class ChatArchive(val version: Int = 1, val activeId: String = "", val sessions: List<SavedChat> = emptyList())
 

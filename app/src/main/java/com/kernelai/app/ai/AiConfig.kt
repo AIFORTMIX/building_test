@@ -44,9 +44,9 @@ data class AiConfig(
             |1. **进程分析** — 列出进程、查看进程详情、加载模块、线程列表
             |2. **内存操作** — 读取/写入/搜索目标进程内存，查看带截断标记的 VMA 映射
             |   支持 memory_read_typed/string/struct、memory_inspect、module_address、address_calculate、pointer_chain。
-            |3. **断点调试** — 设置硬件断点（执行/读/写/读写）和软件断点，查看寄存器快照
+            |3. **断点调试** — 设置硬件断点（执行/读/写/读写），查看命中时寄存器快照。当前驱动不支持软件断点、暂停/继续/单步。
             |4. **反汇编**   — 读取目标地址的原始字节，辅助反汇编分析
-            |5. **调用栈**   — 在断点命中时捕获 ARM64 FP 链调用栈
+            |5. **能力边界** — disassemble_at 只返回原始字节，没有内置静态反汇编器、ELF/函数/交叉引用分析；callstack_capture 当前驱动未实现，不能声称已成功。
             |
             |需要用户补充信息时调用 ask_user，并等待回答。生成期间收到的插话在下一步纳入考虑。
             |工作规范：
@@ -60,6 +60,9 @@ data class AiConfig(
             |- 地址操作前先调用 process_status 获取 process_identity，之后每次读取、搜索、指针链、写入和设置断点都传 expected_identity。目标退出、重启、PID 复用或身份不可核实时停止旧分析，重新解析模块和地址；不得只换 PID 或令牌重用旧指针，不得自动重放写入/设断点。
             |- 结构读取仅解释提供的字段布局。原始字节和候选指针不能直接证明 Java/ART/C++ 对象类型；需符号、已知布局或运行时依据。
             |- 列表有上限，部分读取和工具 isError 必须如实说明。进程未暂停时多次读取不是原子快照，PID 与地址可能失效。
+            |- module_list/memory_map/thread_list 达到驱动上限时，调用 process_records 取得 Root /proc 只读分页，保留 process_identity 和 revision；进程或列表变化则从头刷新，不拼接不同版本。
+            |- format=paged_tool_result 表示完整返回已保存，text 只是原文片段，不一定是完整 JSON。用 tool_result_read(result_id, offset=next_offset) 继续或 query 搜索。不能据首段断言未找到；full_result_saved=false 必须告知信息不全。
+            |- operation_pending=true 表示原操作仍在后台执行。用 tool_operation_status 查询 operation_id；绝不能重新提交原写入、断点或其他有副作用的操作。未知任务记录不等于操作未发生。
             |- 分析结果要准确、简洁，必要时给出进一步建议。
             |- 如果工具返回错误，解释可能的原因并给出排查步骤。
             |- 用中文回答用户问题，技术术语保留英文原文。

@@ -137,7 +137,7 @@ fun MiuixKernelAiTheme(
                 LocalContentColor provides MiuixTheme.colorScheme.onBackground,
                 LocalColorMode provides if (darkTheme) 2 else 1,
             ) {
-                content()
+                com.kernelai.app.ui.components.GlassScene(content)
             }
         }
     )

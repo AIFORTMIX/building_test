@@ -6,6 +6,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.Folder
 import com.kernelai.app.data.ProviderCatalog
 import com.kernelai.app.data.AttachmentStore
 import kotlinx.coroutines.launch
@@ -158,6 +159,10 @@ fun ChatScreen(
     }
     var showSessions by remember { mutableStateOf(false) }
     var showModels by remember { mutableStateOf(false) }
+    var showWorkspaces by remember { mutableStateOf(false) }
+    val workspaces by com.kernelai.app.KernelAiApplication.instance.workspaceRepository.workspaces.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { runCatching { com.kernelai.app.KernelAiApplication.instance.workspaceRepository.load() }
+        .onFailure { viewModel.reportError("工作区加载失败：${it.message}") } }
     var showAttachMenu by remember { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -205,12 +210,12 @@ fun ChatScreen(
     var composerHeight by remember { mutableStateOf(170.dp) }
     var headerHeight by remember { mutableStateOf(72.dp) }
     androidx.compose.runtime.CompositionLocalProvider(LocalGlassBackdrop provides backdrop) {
-        BoxWithConstraints(Modifier.fillMaxSize().background(background).padding(contentPadding).imePadding()) {
+        BoxWithConstraints(Modifier.fillMaxSize().padding(contentPadding).imePadding()) {
             val compact = maxHeight < 330.dp
             val extrasLimit = (maxHeight - headerHeight - bottomInset - if (compact) 120.dp else 200.dp).coerceAtLeast(0.dp)
             Box(Modifier.fillMaxSize()) {
                 if (state.sessionId.isNotEmpty()) savedLists.SaveableStateProvider(state.sessionId) {
-                    ConversationMessages(state, viewModel::loadOlderMessages, composerHeight, headerHeight, backdrop)
+                    ConversationMessages(state, viewModel::loadOlderMessages, composerHeight, headerHeight, backdrop, viewModel::retryLastRequest)
                 }
             }
             Box(Modifier.align(Alignment.TopCenter).fillMaxWidth()
@@ -258,11 +263,16 @@ fun ChatScreen(
                         Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 16.dp, top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                             ModelSelector(state.modelName, { dismissKeyboard(); showModels = true }, Modifier.weight(1f))
                             Spacer(Modifier.width(10.dp))
-                            val usage = state.usage
-                            Text(if (usage == null) "上下文 0 / ${state.contextWindow}" else
-                                "${if (usage.estimated) "估算" else "上次实测"} ${usage.promptTokens} / ${state.contextWindow}",
-                                color = chatForeground().copy(alpha = .62f), fontSize = 10.sp,
-                                modifier = Modifier.background(chatForeground().copy(alpha = .045f), CircleShape).padding(horizontal = 9.dp, vertical = 6.dp))
+                            UsageIndicator(state)
+                        }
+                        if (!compact) Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { dismissKeyboard(); showWorkspaces = true }, enabled = !state.isStreaming, modifier = Modifier.testTag("workspace-selector")) {
+                                Icon(Icons.Rounded.Folder, null, modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(workspaces.firstOrNull { it.id == state.workspaceId }?.let { it.name + if (it.enabled) "" else " · 已停用" } ?: "选择工作区", fontSize = 11.sp, maxLines = 1)
+                            }
+                            Spacer(Modifier.weight(1f))
+                            Text("本会话文件范围", fontSize = 10.sp, color = chatForeground().copy(alpha = .55f))
                         }
                         ChatInputBar(state.inputText, viewModel::updateInputText, sendMessage,
                             viewModel::stopStreaming, state.isStreaming,
@@ -280,6 +290,17 @@ fun ChatScreen(
         if (showSessions) ConversationList(sessions, state.sessionId, { showSessions = false },
             { dismissKeyboard(); viewModel.switchSession(it) }, { dismissKeyboard(); viewModel.newSession() }, viewModel::renameSession, viewModel::deleteSession)
         if (showModels) ModelPicker(modelCatalog, { showModels = false }, viewModel::selectModel, onManageModels)
+        if (showWorkspaces) GlassDialog(true, onDismissRequest = { showWorkspaces = false }, title = "会话工作区") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("AI 的文件操作仅限此会话选择的工作区。生成期间不能切换。", fontSize = 12.sp)
+                workspaces.filter { it.enabled }.forEach { workspace ->
+                    TextButton(onClick = { viewModel.selectWorkspace(workspace.id); showWorkspaces = false }) {
+                        Text((if (state.workspaceId == workspace.id) "● " else "") + workspace.name)
+                    }
+                }
+                TextButton(onClick = { showWorkspaces = false; onOpenUtility("工作区") }) { Text("管理工作区与文件") }
+            }
+        }
     }
 }
 
@@ -341,7 +362,7 @@ private fun ModelSelector(name: String, onClick: () -> Unit, modifier: Modifier 
 
 @Composable
 private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit, bottomPadding: androidx.compose.ui.unit.Dp,
-    topPadding: androidx.compose.ui.unit.Dp, backdrop: LayerBackdrop) {
+    topPadding: androidx.compose.ui.unit.Dp, backdrop: LayerBackdrop, onRetry: () -> Unit) {
     val entries = remember(state.messages) { conversationEntries(state.messages) }
     val visibleMessages = entries.map { it.messages.first() }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex =
@@ -391,7 +412,7 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit, bo
             val tail = latest.messages.lastOrNull()
             val layout = listState.layoutInfo
             listOf(tail?.id, tail?.content?.length, tail?.toolCalls, layout.totalItemsCount,
-                layout.visibleItemsInfo.lastOrNull()?.size, layout.viewportEndOffset, layout.afterContentPadding, latest.isStreaming, rendering)
+                layout.visibleItemsInfo.lastOrNull()?.let { Triple(it.index, it.size, it.offset) }, layout.viewportEndOffset, layout.afterContentPadding, latest.isStreaming, rendering)
         }
             .conflate().collect {
                 // layoutInfo can emit inside a measure pass. Suspend before scrolling so
@@ -405,7 +426,7 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit, bo
     Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize().then(if (glassSupported()) Modifier.layerBackdrop(backdrop) else Modifier).testTag("chat-messages").semantics {
             val index = listState.firstVisibleItemIndex - if (state.hasOlderMessages) 1 else 0
-            this[ChatAnchorMessage] = visibleMessages.getOrNull(index)?.id ?: "load-older"
+            this[ChatAnchorMessage] = entries.getOrNull(index)?.id ?: "load-older"
             this[ChatAnchorOffset] = listState.firstVisibleItemScrollOffset
             this[ChatIsScrolling] = listState.isScrollInProgress
             this[ChatFollowsLatest] = following
@@ -420,10 +441,10 @@ private fun ConversationMessages(state: ChatUiState, onLoadOlder: () -> Unit, bo
                 TextButton(onClick = { following = false; onLoadOlder() }, modifier = Modifier.fillMaxWidth()) { Text("加载更早的消息") }
             }
             if (state.messages.isEmpty()) item(key = "empty") { EmptyChatPlaceholder() }
-            items(entries, key = { it.messages.first().id }, contentType = { if (it.execution) "execution" else it.messages.first().role }) { entry ->
+            items(entries, key = { it.id }, contentType = { if (it.execution) "execution" else it.messages.first().role }) { entry ->
                 if (entry.execution) Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                     ToolExecutionRun(entry.messages, chatForeground(), generationComplete = !state.isStreaming)
-                } else ChatMessageBubble(entry.messages.first(), onRendering = { active ->
+                } else ChatMessageBubble(entry.messages.first(), onRetry = if (state.canRetry && entry.messages.first().id == state.messages.lastOrNull { it.role == MessageRole.ASSISTANT }?.id) onRetry else null, onRendering = { active ->
                     if (entry.id == entries.lastOrNull()?.id) rendering = active
                 })
             }
@@ -495,7 +516,7 @@ fun EmptyChatPlaceholder() {
  */
 @Composable
 @Suppress("DEPRECATION")
-fun ChatMessageBubble(message: ChatMessage, onRendering: (Boolean) -> Unit = {}) {
+fun ChatMessageBubble(message: ChatMessage, onRetry: (() -> Unit)? = null, onRendering: (Boolean) -> Unit = {}) {
     var rendering by remember(message.id) { mutableStateOf(false) }
     val isUser = message.role == MessageRole.USER
     val isTool = message.role == MessageRole.TOOL
@@ -531,12 +552,15 @@ fun ChatMessageBubble(message: ChatMessage, onRendering: (Boolean) -> Unit = {})
             Column(modifier = Modifier.padding(12.dp)) {
                 message.attachments.forEach { AttachmentTile(it) }
                 if (!isUser) {
+                    ReasoningPanel(message)
+                    message.retry?.let { RetryRow(it) }
                     ExecutionStatus(message, contentColor)
                     message.toolCalls?.takeIf { it.isNotEmpty() }?.let { calls ->
                         ToolExecutionGroup(calls, contentColor)
                         Spacer(Modifier.height(8.dp))
                     }
                 }
+                message.failure?.let { ProviderErrorCard(it, onRetry) }
                 if (message.content.isNotEmpty()) {
                     if (isUser || isTool) {
                         SelectionContainer { Text(message.content, color = contentColor, fontSize = 14.sp, lineHeight = 22.sp,

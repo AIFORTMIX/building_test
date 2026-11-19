@@ -57,7 +57,7 @@ fun MarkdownMessage(source: String, streaming: Boolean, textColor: Color, modifi
     }
     SelectionContainer(modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            val document = blocks
+            val document = remember(blocks) { blocks?.let { markdownPresentation(it) } }
             if (document == null) Text("正在加载内容…", color = textColor, fontSize = 13.sp, lineHeight = 23.sp)
             else {
                 CompositionLocalProvider(LocalInlineImages provides remember(document) { previewImages(document) }) {
@@ -103,12 +103,10 @@ private fun MarkdownBlocks(blocks: List<MdBlock>, color: Color, streaming: Boole
             } }
         }
         is MdBlock.Code -> {
-            if (block.language.isNotBlank() && (block.text.length >= 80 || block.language.lowercase() in setOf("html", "svg"))) {
+            if (block.language.lowercase() in setOf("html", "svg")) {
                 CodeArtifactCard(block)
-                var expanded by remember { mutableStateOf(false) }
-                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起代码" else "显示代码", fontSize = 12.sp) }
-                if (expanded) CodeBlock(block, color)
-            } else CodeBlock(block, color)
+            }
+            CodeBlock(block, color)
         }
         is MdBlock.Table -> MarkdownTable(block, color, "$path/$index")
         is MdBlock.Literal -> Text(block.text, color = color, fontSize = 14.sp, lineHeight = 22.sp)

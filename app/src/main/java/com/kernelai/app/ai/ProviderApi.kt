@@ -41,7 +41,7 @@ class ProviderApi : Closeable {
                 override fun onResponse(call: Call, response: Response) {
                     try {
                         val result = response.use {
-                            if (!it.isSuccessful) throw IOException("获取模型失败：HTTP ${it.code}；可手动添加模型 ID")
+                            if (!it.isSuccessful) { val failure = AiFailures.http(it, provider.apiKey); throw IOException(failure.message + "\n" + failure.suggestion) }
                             val source = it.body?.source() ?: error("响应为空")
                             require(!source.request(2_097_153)) { "模型响应超过 2 MiB" }
                             parseModels(source.readUtf8())

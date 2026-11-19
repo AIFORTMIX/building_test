@@ -1,5 +1,7 @@
 package com.kernelai.app.ui.screen.settings
 
+import com.kernelai.app.ui.components.GlassCard as Card
+
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -72,6 +74,11 @@ fun WorkspaceScreen(close: () -> Unit) {
                 else operation { val file = repository.preview(selected, child); ArtifactPreview.open(context, file.absolutePath, entry.name, local = true) }
             }.padding(16.dp)) { Text((if (entry.directory) "▸ " else "") + entry.name); if (!entry.directory) Text("${entry.size} 字节 · 点击预览文本", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary) } }
         }
-        if (more) item { Text("仅列出前 500 项，请使用更小的目录。", fontSize = 12.sp) }
+        if (more) item { TextButton(enabled = !loading, onClick = { scope.launch {
+            loading = true
+            try { val result = repository.entries(selected, path, entries.size); entries = entries + result.first; more = result.second }
+            catch (failure: Exception) { if (failure is CancellationException) throw failure; error = failure.message }
+            finally { loading = false }
+        } }) { Text("加载更多文件 · 已显示 ${entries.size} 项") } }
     }
 }

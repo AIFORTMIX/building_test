@@ -65,10 +65,11 @@ class WorkspaceRepository(private val context: Context) {
     internal suspend fun <T> use(id: String, ai: Boolean = true, block: (WorkspaceAccess) -> T): T = withContext(Dispatchers.IO) {
         lock.withLock { loadLocked(); block(access(id, ai)) }
     }
-    internal suspend fun entries(id: String, path: String) = use(id, false) { it.list(path) }
+    internal suspend fun entries(id: String, path: String, offset: Int = 0) = use(id, false) { it.list(path, offset) }
     internal suspend fun preview(id: String, path: String): File = use(id, false) {
         val text = WorkspacePaths.text(it.read(path))
         val directory = File(context.filesDir, "artifacts/workspace-previews").apply { mkdirs() }
-        File(directory, "${text.sha256.take(16)}-${path.substringAfterLast('/').take(100)}").apply { writeText(text.content) }
+        val extension = path.substringAfterLast('.', "txt").lowercase().takeIf { value -> value.matches(Regex("[a-z0-9]{1,12}")) } ?: "txt"
+        File(directory, "${text.sha256}.$extension").apply { writeText(text.content) }
     }
 }

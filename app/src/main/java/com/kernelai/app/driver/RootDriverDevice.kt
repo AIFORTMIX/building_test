@@ -118,4 +118,8 @@ class RootDriverDevice(context: Context) : DriverDevice {
             kotlinx.serialization.json.Json.decodeFromString(ProcessSnapshot.serializer(), raw).also { require(it.pid == pid) }
         } catch (error: Exception) { ProcessSnapshot(pid, "unavailable", detail = "Root 进程状态查询失败：${error.message}") }
     }
+    override fun processRecords(pid: Int, kind: String, offset: Int, limit: Int, identity: String?, revision: String?): String {
+        val remote = binding?.remote ?: error("Root 服务未连接")
+        return remote.processRecords(pid, kind, offset, limit, identity, revision).also { require(it.length <= 512000) { "进程分页响应过大" } }
+    }
 }

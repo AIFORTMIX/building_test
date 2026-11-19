@@ -9,7 +9,10 @@ internal fun toolPurpose(call: ToolCallInfo): String {
     arg("_purpose").takeIf { it.isNotBlank() }?.let { return it.take(160) }
     val target = arg("pkg_name").ifBlank { arg("pid").takeIf { it.isNotEmpty() }?.let { "PID $it" }.orEmpty() }
     return when (call.name) {
+        "tool_result_read" -> "读取已保存结果的下一段或检索关键词"
+        "tool_operation_status" -> "查询后台工具任务的执行进度和结果"
         "process_list" -> arg("filter").let { if (it.isBlank()) "查询设备正在运行的进程" else "查找与 $it 相关的进程" }
+        "process_records" -> "分页读取 $target 的 ${arg("kind")} 完整记录"
         "process_resolve" -> "核对 ${arg("pkg_name")} 是否运行"
         "process_info" -> "查看 $target 的模块、映射和线程"
         "process_status" -> "核对 $target 是否仍是同一个进程实例"

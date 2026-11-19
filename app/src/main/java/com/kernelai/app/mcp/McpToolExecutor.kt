@@ -369,6 +369,7 @@ class McpToolExecutorImpl(
             put("pid", pid)
             put("count", modules.size)
             put("limit", 256); put("may_be_truncated", modules.size >= 256)
+            if (modules.size >= 256) put("continuation", "调用 process_records(pid, kind=modules) 获取完整文件映射分页；其条目是映射段，不同于本工具的每文件首映射。")
             put("mapping_scope", "first_mapping_per_file")
             putJsonArray("modules") {
                 modules.forEach { m ->
@@ -406,6 +407,7 @@ class McpToolExecutorImpl(
             put("pid", pid)
             put("count", filtered.size)
             put("raw_count", vmas.size); put("limit", 1024); put("may_be_truncated", vmas.size >= 1024)
+            put("full_paths_tool", "process_records(pid, kind=maps)")
             putJsonArray("vmas") {
                 filtered.forEach { v ->
                     addJsonObject {
@@ -707,6 +709,8 @@ class McpToolExecutorImpl(
         return buildJsonObject {
             put("pid", pid)
             put("count", threads.size)
+            put("limit", 256); put("may_be_truncated", threads.size >= 256)
+            if (threads.size >= 256) put("continuation", "调用 process_records(pid, kind=threads)，传 next_offset 继续查询全部线程；该只读来源不提供内核 PC 或栈指针。")
             putJsonArray("threads") {
                 threads.forEach { t ->
                     addJsonObject {

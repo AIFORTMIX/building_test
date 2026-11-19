@@ -6,16 +6,19 @@ import com.kernelai.app.mcp.McpToolExecutor
 
 /** Approximation only: providers have different tokenizers and vision pricing. */
 internal object ContextBudget {
+    private fun tokens(value: String): Int {
+        val nonAscii = value.count { it.code > 127 }
+        return ((value.length.toLong() + 2L * nonAscii + 2) / 3).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+    fun breakdown(messages: List<ApiChatMessage>, tools: List<McpToolExecutor.ToolDefinition>, output: Int): com.kernelai.app.data.model.ContextBreakdown {
+        fun cost(message: ApiChatMessage) = tokens(message.content.orEmpty()) + tokens(message.reasoningContent.orEmpty()) + 8 +
+            message.toolCalls.orEmpty().sumOf { tokens(it.function.name) + tokens(it.function.arguments) } +
+            message.attachments.filterNot { it.isImage }.sumOf { tokens(it.textContent.orEmpty()) }
+        return com.kernelai.app.data.model.ContextBreakdown(messages.filter { it.role == "system" }.sumOf(::cost),
+            tools.sumOf { tokens(it.description) + tokens(it.inputSchema.toString()) }, messages.filterNot { it.role == "system" }.sumOf(::cost),
+            messages.sumOf { message -> message.attachments.count { it.isImage } } * 2048, output.coerceAtLeast(0))
+    }
     fun estimate(messages: List<ApiChatMessage>, tools: List<McpToolExecutor.ToolDefinition> = emptyList()): ContextUsage {
-        var chars = tools.sumOf { it.description.length.toLong() + it.inputSchema.toString().length }
-        var images = 0
-        messages.forEach { message ->
-            chars += (message.content?.length ?: 0) + 24L
-            message.toolCalls.orEmpty().forEach { chars += it.function.arguments.length + it.function.name.length }
-            message.attachments.forEach { if (it.isImage) images++ else chars += it.textContent?.length ?: 0 }
-        }
-        // One token per non-ASCII char, one per ~3 ASCII chars; intentionally conservative.
-        val nonAscii = messages.sumOf { it.content.orEmpty().count { c -> c.code > 127 }.toLong() }
-        return ContextUsage(((chars + 2 * nonAscii + 2) / 3 + images * 2048L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+        return ContextUsage(breakdown(messages, tools, 0).input)
     }
 }

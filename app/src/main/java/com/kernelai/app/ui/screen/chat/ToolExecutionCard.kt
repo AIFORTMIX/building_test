@@ -36,13 +36,14 @@ import androidx.compose.ui.unit.sp
 import com.kernelai.app.data.model.*
 import com.kernelai.app.mcp.McpToolDefinitions
 import kotlinx.coroutines.delay
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 import java.util.Locale
 
 private val detailJson = Json { prettyPrint = true }
 
 @Composable
 fun ExecutionStatus(message: ChatMessage, color: Color) {
+    if (message.retry != null || message.failure != null || message.reasoning.isNotBlank()) return
     val label = when (message.phase) {
         AssistantPhase.THINKING -> "思考中…"
         AssistantPhase.RESPONDING -> if (message.content.isNotBlank()) return else "正在生成回复…"
@@ -114,7 +115,6 @@ internal fun ToolExecutionRun(messages: List<ChatMessage>, color: Color, generat
         }
         if (expanded) Column(Modifier.padding(start = 18.dp, end = 10.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             messages.filter { !it.toolCalls.isNullOrEmpty() }.forEachIndexed { index, message -> key(message.id) {
-                if (message.content.isNotBlank()) MarkdownMessage(message.content, false, color)
                 ToolExecutionGroup(message.toolCalls.orEmpty(), color, "第 ${index + 1} 批", message.id)
             } }
         }
@@ -148,7 +148,8 @@ fun ToolExecutionCard(call: ToolCallInfo, color: Color) {
             now = System.currentTimeMillis(); delay(500)
         }
     }
-    val status = when (call.status) {
+    val pendingReceipt = remember(call.result) { call.result?.let { com.kernelai.app.mcp.receiptMetadata(it)["operation_pending"] == JsonPrimitive(true) } == true }
+    val status = if (pendingReceipt) "已提交 · 后台仍在执行" else when (call.status) {
         ToolCallStatus.PENDING -> "准备调用"
         ToolCallStatus.RUNNING -> "执行中"
         ToolCallStatus.COMPLETED -> "完成"
@@ -188,13 +189,16 @@ fun ToolExecutionCard(call: ToolCallInfo, color: Color) {
 @Composable
 private fun ExecutionDetail(label: String, value: String, color: Color, json: Boolean = false) {
     val copyText = rememberChatCopy()
-    var showMore by rememberSaveable(value.take(80)) { mutableStateOf(false) }
-    val preview = remember(value, showMore, json) {
-        val limit = if (showMore) 128_000 else 6_000
+    var page by rememberSaveable(value.take(80)) { mutableIntStateOf(0) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val resultId = remember(value) { runCatching { Json.parseToJsonElement(value).jsonObject["result_id"]?.jsonPrimitive?.contentOrNull }.getOrNull() }
+    var resultError by remember { mutableStateOf<String?>(null) }
+    val preview = remember(value, page, json) {
+        val limit = 6_000
         val text = if (json && value.length <= 16_000) runCatching {
             detailJson.encodeToString(kotlinx.serialization.json.JsonElement.serializer(), Json.parseToJsonElement(value))
         }.getOrDefault(value) else value
-        text.take(limit) + if (text.length > limit) "\n…（显示已截断，可复制完整内容）" else ""
+        text.drop(page * limit).take(limit)
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = color, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
@@ -205,5 +209,14 @@ private fun ExecutionDetail(label: String, value: String, color: Color, json: Bo
             modifier = Modifier.fillMaxWidth().background(color.copy(alpha = .04f), RoundedCornerShape(4.dp))
                 .horizontalScroll(rememberScrollState()).padding(8.dp))
     }
-    if (value.length > 6_000) TextButton(onClick = { showMore = !showMore }) { Text(if (showMore) "收起长内容" else "展开更多内容", color = color) }
+    if (value.length > 6_000) Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { page-- }, enabled = page > 0) { Text("上一段", color = color) }
+        Text("${page + 1} / ${(value.length + 5999) / 6000}", color = color, fontSize = 11.sp)
+        TextButton(onClick = { page++ }, enabled = (page + 1) * 6000 < value.length) { Text("下一段", color = color) }
+    }
+    resultId?.let { id -> TextButton(onClick = { runCatching {
+        val file = com.kernelai.app.KernelAiApplication.instance.toolResultStore.localFile(id)
+        com.kernelai.app.ui.preview.ArtifactPreview.open(context, file.path, "完整工具返回", com.kernelai.app.ui.preview.PreviewKind.TEXT, local = true)
+    }.onFailure { resultError = it.message } }) { Text("查看完整结果", color = color) } }
+    resultError?.let { Text(it, color = color, fontSize = 11.sp) }
 }

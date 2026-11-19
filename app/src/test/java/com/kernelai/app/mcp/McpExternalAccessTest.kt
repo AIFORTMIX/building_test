@@ -21,6 +21,10 @@ class McpExternalAccessTest {
             val endpoint = runtime.endpoint()
             val external = runtime.externalAccessToken()
             assertNotEquals(endpoint.token, external)
+            runtime.ensureLocal(0) // A stale Activity startup cannot downgrade this external host.
+            assertTrue(runtime.state.value.exposed)
+            assertSame(endpoint, runtime.endpoint())
+            assertEquals(external, runtime.externalAccessToken())
             var sessionId: String? = null
             fun call(method: String, params: JsonObject, token: String = external): Response {
                 val body = buildJsonObject { put("jsonrpc", "2.0"); put("id", 7); put("method", method); put("params", params) }

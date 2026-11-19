@@ -94,8 +94,9 @@ class DriverViewModel : ViewModel() {
         viewModelScope.launch {
             val runtime = KernelAiApplication.instance.mcpRuntime
             if (runtime.isRunning) {
-                withContext(Dispatchers.IO) { runtime.stop() }
-                KernelAiApplication.instance.stopService(android.content.Intent(KernelAiApplication.instance, com.kernelai.app.mcp.McpHostService::class.java))
+                if (com.kernelai.app.mcp.McpHostService.requested(KernelAiApplication.instance) || runtime.state.value.exposed)
+                    com.kernelai.app.mcp.McpHostService.setAccess(KernelAiApplication.instance, false, stopAll = true)
+                else withContext(Dispatchers.IO) { runtime.stop() }
                 _connectionStatus.value = _connectionStatus.value.copy(mcpServerRunning = false)
                 addLog(LogEntry.LogLevel.INFO, LogCategory.MCP, "MCP 服务已停止")
             } else startMcpServer()
@@ -155,11 +156,17 @@ class DriverViewModel : ViewModel() {
     private suspend fun startMcpServer() {
         try {
             val runtime = KernelAiApplication.instance.mcpRuntime
+            if (com.kernelai.app.mcp.McpHostService.requested(KernelAiApplication.instance)) {
+                com.kernelai.app.mcp.McpHostService.restore(KernelAiApplication.instance)
+                return
+            }
+            // Activity recreation must never replace an external listener with a loopback-only one.
+            if (runtime.isRunning) return
             withContext(Dispatchers.IO) {
-                try { runtime.start(_appSettings.value.driverSettings.mcpPort) }
+                try { runtime.ensureLocal(_appSettings.value.driverSettings.mcpPort) }
                 catch (error: Exception) {
                     if (generateSequence<Throwable>(error) { it.cause }.none { it is java.net.BindException }) throw error
-                    runtime.start(0)
+                    runtime.ensureLocal(0)
                 }
             }
             _connectionStatus.value = _connectionStatus.value.copy(mcpServerRunning = runtime.isRunning, mcpPort = runtime.port)

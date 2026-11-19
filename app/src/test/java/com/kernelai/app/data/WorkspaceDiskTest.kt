@@ -54,5 +54,7 @@ class WorkspaceDiskTest {
     @Test fun directoryListingReportsTruncation() {
         val root = temporary.newFolder(); repeat(503) { java.io.File(root, "$it.txt").writeText("a") }
         val result = WorkspaceDisk(root).list(""); assertEquals(500, result.first.size); assertTrue(result.second)
+        val tail = WorkspaceDisk(root).list("", 500); assertEquals(3, tail.first.size); assertFalse(tail.second)
+        assertEquals(503, (result.first + tail.first).map { it.name }.distinct().size)
     }
 }

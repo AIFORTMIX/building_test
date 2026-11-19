@@ -17,7 +17,7 @@ class ConversationPresentationTest {
         val entries = conversationEntries(raw)
         assertEquals(3, entries.size)
         assertEquals(listOf(first, second), entries[1].messages)
-        assertEquals("one", entries[1].id)
+        assertEquals("one:tools", entries[1].id)
         assertEquals(receipt, raw[2])
         assertEquals(answer, entries.last().messages.single())
     }
@@ -29,15 +29,28 @@ class ConversationPresentationTest {
         assertEquals(listOf(true, false, true), entries.map { it.execution })
     }
 
-    @Test fun pendingSummaryStaysInRunUntilActualAnswerStarts() {
+    @Test fun modelStatusAndAnswerAlwaysStayOutsideTheToolAccordion() {
         val first = tool("one")
         val waiting = ChatMessage(role = MessageRole.ASSISTANT, content = "", isStreaming = true, phase = AssistantPhase.SUMMARIZING)
-        assertEquals(1, conversationEntries(listOf(first, waiting)).size)
+        assertEquals(2, conversationEntries(listOf(first, waiting)).size)
         val answer = waiting.copy(content = "结果", phase = AssistantPhase.RESPONDING)
         val entries = conversationEntries(listOf(first, answer))
         assertEquals(2, entries.size)
-        assertEquals("one", entries.first().id)
-        assertEquals(waiting.id, entries.last().id)
+        assertEquals("one:tools", entries.first().id)
+        assertEquals(waiting.id + ":message", entries.last().id)
+    }
+
+    @Test fun mixedAssistantProseAndReasoningNeverDisappearInsideCollapsedTools() {
+        val first = tool("mixed").copy(content = "我先核实目标进程", reasoning = "按身份核对")
+        val answer = ChatMessage(role = MessageRole.ASSISTANT, content = "分析结论")
+        val entries = conversationEntries(listOf(first, answer))
+        assertEquals(listOf(false, true, false), entries.map { it.execution })
+        assertEquals(first.content, entries[0].messages.single().content)
+        assertEquals(first.reasoning, entries[0].messages.single().reasoning)
+        assertNull(entries[0].messages.single().toolCalls)
+        assertEquals("", entries[1].messages.single().content)
+        assertEquals(answer.content, entries[2].messages.single().content)
+        assertEquals(3, entries.map { it.id }.distinct().size)
     }
 
     @Test fun revealNeverCutsSurrogatePairsAndAlwaysMakesBoundedProgress() {

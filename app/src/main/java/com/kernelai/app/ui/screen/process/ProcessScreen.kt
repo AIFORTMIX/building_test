@@ -30,7 +30,7 @@ import com.kernelai.app.ui.components.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.Surface
+import com.kernelai.app.ui.components.FrostedSurface as Surface
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.PullToRefresh
 import androidx.compose.runtime.Composable

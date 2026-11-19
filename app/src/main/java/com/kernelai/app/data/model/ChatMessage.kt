@@ -15,7 +15,10 @@ data class ChatMessage(
     val toolCalls: List<ToolCallInfo>? = null,
     val isStreaming: Boolean = false,
     val phase: AssistantPhase? = null,
-    val attachments: List<Attachment> = emptyList()
+    val attachments: List<Attachment> = emptyList(),
+    val reasoning: String = "",
+    val failure: com.kernelai.app.ai.AiFailure? = null,
+    val retry: RetryNotice? = null
 )
 
 /**
@@ -65,7 +68,10 @@ data class ApiChatMessage(
     val toolCalls: List<ApiToolCall>? = null,
     val toolCallId: String? = null,
     val name: String? = null,
-    val attachments: List<Attachment> = emptyList()
+    val attachments: List<Attachment> = emptyList(),
+    val reasoningContent: String? = null,
+    val reasoningField: String = "reasoning_content",
+    val interrupted: Boolean = false
 )
 
 @Serializable
@@ -114,6 +120,7 @@ fun ChatMessage.toApiMessage(): ApiChatMessage {
             MessageRole.TOOL -> "tool"
         },
         content = content,
+        reasoningContent = reasoning.takeIf { it.isNotEmpty() },
         toolCalls = toolCalls?.map { tc ->
             ApiToolCall(
                 id = tc.id,
@@ -134,7 +141,26 @@ data class Attachment(val id: String = UUID.randomUUID().toString(), val name: S
     val isImage: Boolean get() = mime.startsWith("image/")
 }
 @Serializable
-data class ContextUsage(val promptTokens: Int, val completionTokens: Int = 0, val estimated: Boolean = true)
+data class ContextUsage(val promptTokens: Int, val completionTokens: Int = 0, val estimated: Boolean = true,
+    val cachedTokens: Int? = null, val reasoningTokens: Int? = null)
+
+@Serializable
+data class RetryNotice(val attempt: Int, val maximum: Int, val nextAt: Long, val reason: String)
+
+@Serializable
+data class UsageTotals(val input: Long = 0, val output: Long = 0, val cached: Long = 0,
+    val requests: Int = 0, val cacheReported: Boolean = false, val cacheInput: Long = 0) {
+    fun plus(usage: ContextUsage) = if (usage.estimated) this else copy(input = input + usage.promptTokens,
+        output = output + usage.completionTokens, cached = cached + (usage.cachedTokens ?: 0),
+        requests = requests + 1, cacheReported = cacheReported || usage.cachedTokens != null,
+        cacheInput = cacheInput + if (usage.cachedTokens != null) usage.promptTokens else 0)
+}
+
+data class ContextBreakdown(val system: Int = 0, val tools: Int = 0, val messages: Int = 0,
+    val images: Int = 0, val reservedOutput: Int = 0) {
+    val input get() = (system.toLong() + tools + messages + images).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    val total get() = (input.toLong() + reservedOutput).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+}
 
 @Serializable
 data class UserQuestion(val callId: String, val question: String, val options: List<String> = emptyList())

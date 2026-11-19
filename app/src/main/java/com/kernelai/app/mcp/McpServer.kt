@@ -88,7 +88,7 @@ class McpServer(
                         put("description", tool.description)
                         put("inputSchema", tool.inputSchema)
                         putJsonObject("annotations") {
-                            val mutates = tool.name in setOf("memory_write", "breakpoint_set", "breakpoint_remove")
+                            val mutates = tool.name in setOf("memory_write", "breakpoint_set", "breakpoint_remove", "workspace_write_file", "workspace_edit_file", "workspace_create_directory")
                             put("readOnlyHint", !mutates); put("destructiveHint", mutates); put("openWorldHint", false)
                         }
                     }

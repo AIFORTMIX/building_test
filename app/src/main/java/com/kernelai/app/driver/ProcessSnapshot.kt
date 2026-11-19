@@ -52,7 +52,7 @@ class ProcessInspector(private val root: File = File("/proc")) {
             listOf(19, 23, 24, 25).forEach { require(fields[it].toULongOrNull() != null) { "无效的进程身份字段" } }
             return Stat(text.substring(begin + 1, end), fields[0], fields[19], fields[23], fields[24], fields[25])
         }
-        private fun readBounded(file: File, limit: Int): String = Files.newInputStream(file.toPath()).use { input ->
+        internal fun readBounded(file: File, limit: Int): String = Files.newInputStream(file.toPath()).use { input ->
             val data = ByteArray(limit); var count = 0
             while (count < data.size) { val next = input.read(data, count, data.size - count); if (next < 0) break; count += next }
             String(data, 0, count, Charsets.UTF_8)

@@ -200,7 +200,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) { navDisplay() }
+                    Box(Modifier.fillMaxSize()) { navDisplay() }
                 }
             }
         }
@@ -216,7 +216,7 @@ class MainActivity : ComponentActivity() {
 /** Detail routes do not use the main pager's inset-aware scaffold. */
 @Composable
 private fun StandalonePage(content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)
+    Box(Modifier.fillMaxSize()
         .windowInsetsPadding(WindowInsets.safeDrawing)) { content() }
 }
 
@@ -290,7 +290,7 @@ private fun MainScreen(
     val backdrops = List(MainPagerConfig.PAGE_COUNT) {
         top.yukonga.miuix.kmp.blur.rememberLayerBackdrop { drawRect(background); drawContent() }
     }
-    Box(Modifier.fillMaxSize().background(background)) {
+    Box(Modifier.fillMaxSize()) {
         HorizontalPager(state = pagerState,
             modifier = Modifier.fillMaxSize().padding(start = if (isLandscape) 96.dp else 0.dp),
             beyondViewportPageCount = 1, userScrollEnabled = false) { page ->

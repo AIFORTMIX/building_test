@@ -17,6 +17,10 @@ class RootDriverService : RootService() {
         if (uid != allowedUid && uid != 0) throw SecurityException("Root driver caller rejected")
     }
     private val binder = object : IRootDriver.Stub() {
+        override fun processRecords(pid: Int, kind: String, offset: Int, limit: Int, expectedIdentity: String?, expectedRevision: String?): String {
+            checkCaller()
+            return ProcRecords().read(pid, kind, offset, limit, expectedIdentity, expectedRevision)
+        }
         override fun processSnapshot(pid: Int): String {
             checkCaller()
             return kotlinx.serialization.json.Json.encodeToString(ProcessSnapshot.serializer(), inspector.read(pid))

@@ -17,10 +17,12 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+internal class McpToolFailure(val result: String) : IOException("MCP 工具返回失败结果")
+
 /** AI tool calls traverse the actual JSON-RPC HTTP endpoint used by other MCP clients. */
 class McpHttpToolExecutor(private val endpoint: () -> McpEndpoint, private val additionalTools: List<McpToolExecutor.ToolDefinition> = emptyList()) : McpToolExecutor, Closeable {
     private val http = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS).followRedirects(false).build()
+        .readTimeout(60, TimeUnit.SECONDS).followRedirects(false).retryOnConnectionFailure(false).build()
     private val ids = AtomicLong()
     private val initializeLock = Mutex()
     private var initialized: McpEndpoint? = null
@@ -52,7 +54,7 @@ class McpHttpToolExecutor(private val endpoint: () -> McpEndpoint, private val a
             val content = it.jsonObject
             if (content["type"]?.jsonPrimitive?.content == "text") content["text"]?.jsonPrimitive?.content else null
         }?.joinToString("\n") ?: throw IOException("MCP 工具响应缺少 content")
-        if (result["isError"]?.jsonPrimitive?.booleanOrNull == true) throw IOException(text)
+        if (result["isError"]?.jsonPrimitive?.booleanOrNull == true) throw McpToolFailure(text)
         text
     }
     private suspend fun rpc(connection: McpEndpoint, method: String, params: JsonObject, notification: Boolean = false): JsonObject? {

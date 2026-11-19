@@ -98,7 +98,9 @@ class McpHttpServer(port: Int, private val token: String, private val server: Mc
             }
             val result = runBlocking(Dispatchers.IO) { server.handleMessage(message) }
             val response = result?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() }
-            record(when { response?.get("error") != null -> "协议错误"; (response?.get("result") as? JsonObject)?.get("isError") == JsonPrimitive(true) -> "工具失败"; else -> "成功" })
+            val toolResult = response?.get("result") as? JsonObject
+            val receipt = (toolResult?.get("content") as? JsonArray)?.firstOrNull()?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull
+            record(when { response?.get("error") != null -> "协议错误"; toolResult?.get("isError") == JsonPrimitive(true) -> "工具失败"; receipt?.let { receiptMetadata(it)["operation_pending"] == JsonPrimitive(true) } == true -> "后台执行中"; else -> "成功" })
             reply(if (result == null) Response.Status.ACCEPTED else Response.Status.OK, result.orEmpty())
         } catch (_: Exception) {
             reply(Response.Status.BAD_REQUEST, "{}")
