@@ -11,12 +11,17 @@ import com.topjohnwu.superuser.ipc.RootService
 class RootDriverService : RootService() {
     private val device = DeviceNode()
     private val inspector = ProcessInspector()
+    private val debugger by lazy { com.kernelai.app.debugger.RootDebugger(this, inspector) }
     private val allowedUid by lazy { packageManager.getApplicationInfo(packageName, 0).uid }
     private fun checkCaller() {
         val uid = Binder.getCallingUid()
         if (uid != allowedUid && uid != 0) throw SecurityException("Root driver caller rejected")
     }
     private val binder = object : IRootDriver.Stub() {
+        override fun debugCommand(action: String, arguments: String): String {
+            checkCaller()
+            return debugger.call(action, arguments, Binder.getCallingPid())
+        }
         override fun processRecords(pid: Int, kind: String, offset: Int, limit: Int, expectedIdentity: String?, expectedRevision: String?): String {
             checkCaller()
             return ProcRecords().read(pid, kind, offset, limit, expectedIdentity, expectedRevision)
@@ -54,6 +59,6 @@ class RootDriverService : RootService() {
         }
     }
     override fun onBind(intent: Intent): IBinder = binder
-    override fun onDestroy() { device.close(); super.onDestroy() }
+    override fun onDestroy() { debugger.close(); device.close(); super.onDestroy() }
     companion object { const val MAX_PACKET_BYTES = 40 + 16 * 1024 * 1024 }
 }

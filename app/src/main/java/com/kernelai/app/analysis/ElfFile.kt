@@ -17,6 +17,9 @@ internal class ElfFile(private val file: File, private val checkCancelled: () ->
     private val sections: List<Section>
     private val segments: List<Segment>
     private val names: Section?
+    private val nameCache = object : LinkedHashMap<Pair<Long, Long>, String>(256, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<Long, Long>, String>?) = size > 256
+    }
 
     private data class Section(val nameIndex: Long, val type: Long, val flags: ULong, val address: ULong,
         val offset: Long, val size: Long, val link: Long, val info: Long, val entrySize: Long)
@@ -49,6 +52,11 @@ internal class ElfFile(private val file: File, private val checkCancelled: () ->
                 if (s.type != 8L && s.type != 0L) range(s.offset, s.size)
                 require(s.address <= ULong.MAX_VALUE - s.size.toULong()) { "节虚拟地址溢出" }
             } }
+            // ELF file-backed sections cannot alias each other's bytes (gABI section rules).
+            // Reject overlapping tables before a small file can amplify into billions of symbols.
+            sections.filter { it.type != 0L && it.type != 8L && it.size > 0 }.sortedBy { it.offset }.zipWithNext().forEach { (a, b) ->
+                require(a.size <= b.offset - a.offset) { "ELF 文件节范围重叠" }
+            }
             segments = List(phcount) { index ->
                 val p = buffer(phoff + index.toLong() * phsize, 56)
                 Segment(u32(p, 0), u32(p, 4), p.getLong(8), p.getLong(16).toULong(), p.getLong(32), p.getLong(40)).also {
@@ -60,7 +68,7 @@ internal class ElfFile(private val file: File, private val checkCancelled: () ->
             names = if (strindex == 0) null else sections.getOrNull(strindex)?.also { require(it.type == 3L) { "节名称表不是字符串表" } }
                 ?: if (strindex != 0) invalid("节名称表索引越界") else null
             sections.filter { it.type == 2L || it.type == 11L }.forEach {
-                require(it.entrySize >= 24 && it.size % it.entrySize == 0L && it.size / it.entrySize <= 1000000) { "符号表条目无效或过大" }
+                require(it.entrySize >= 24 && it.size % it.entrySize == 0L && it.size / it.entrySize <= MAX_FILE_BYTES / 24) { "符号表条目无效或过大" }
                 require(sections.getOrNull(it.link.toInt())?.type == 3L) { "符号字符串表索引无效" }
             }
         } catch (error: Throwable) { input.close(); throw error }
@@ -85,10 +93,20 @@ internal class ElfFile(private val file: File, private val checkCancelled: () ->
     private fun string(table: Section?, offset: Long): String {
         if (table == null) return ""
         require(offset in 0 until table.size) { "ELF 字符串索引越界" }
-        val raw = bytes(table.offset + offset, minOf(4096L, table.size - offset).toInt())
-        val end = raw.indexOf(0)
-        require(end >= 0) { "ELF 名称未终止或超过 4095 字节" }
-        return String(raw, 0, end, Charsets.UTF_8)
+        val key = (table.offset + offset) to (table.offset + table.size)
+        nameCache[key]?.let { return it }
+        val text = java.io.ByteArrayOutputStream()
+        val available = minOf(4096L, table.size - offset).toInt()
+        while (text.size() < available) {
+            val raw = bytes(table.offset + offset + text.size(), minOf(128, available - text.size()))
+            val end = raw.indexOf(0)
+            if (end >= 0) {
+                text.write(raw, 0, end)
+                return text.toString("UTF-8").also { nameCache[key] = it }
+            }
+            text.write(raw)
+        }
+        invalid("ELF 名称未终止或超过 4095 字节")
     }
     private fun name(s: Section) = string(names, s.nameIndex)
     fun info(): JsonObject = buildJsonObject {
@@ -102,7 +120,7 @@ internal class ElfFile(private val file: File, private val checkCancelled: () ->
     }
 
     fun query(kind: String, offset: Int, limit: Int, query: String): JsonObject {
-        require(offset in 0..(if (kind == "strings") MAX_FILE_BYTES.toInt() else 1000000) && limit in 1..200 && query.length <= 256)
+        require(offset in 0..MAX_FILE_BYTES.toInt() && limit in 1..200 && query.length <= 256)
         if (kind == "strings") return strings(offset, limit, query)
         val rows: Sequence<JsonObject> = when (kind) {
             "sections" -> sections.asSequence().mapIndexed { i, s -> buildJsonObject {
@@ -113,10 +131,11 @@ internal class ElfFile(private val file: File, private val checkCancelled: () ->
                 put("index", i); put("type", p.type); put("flags", p.flags); put("address", hex(p.address)); put("file_offset", p.offset)
                 put("file_size", p.fileSize); put("memory_size", p.memorySize)
             } }
-            "symbols", "imports", "exports", "functions" -> symbols(kind)
+            "symbols", "imports", "exports", "functions" -> symbols(kind, if (query.isEmpty()) offset else 0)
             else -> invalid("kind 应为 sections/segments/symbols/imports/exports/functions/strings")
         }
-        val found = rows.filter { query.isEmpty() || it.toString().contains(query, ignoreCase = true) }.drop(offset).take(limit + 1).toList()
+        val alreadySkipped = kind in listOf("symbols", "imports", "exports", "functions") && query.isEmpty()
+        val found = rows.filter { query.isEmpty() || it.toString().contains(query, ignoreCase = true) }.drop(if (alreadySkipped) 0 else offset).take(limit + 1).toList()
         return buildJsonObject {
             put("kind", kind); put("entries", JsonArray(found.take(limit))); put("offset", offset); put("has_more", found.size > limit)
             if (found.size > limit) put("next_offset", offset + limit)
@@ -125,10 +144,13 @@ internal class ElfFile(private val file: File, private val checkCancelled: () ->
         }
     }
 
-    private fun symbols(kind: String): Sequence<JsonObject> = sequence {
+    private fun symbols(kind: String, skip: Int = 0): Sequence<JsonObject> = sequence {
+        var remaining = skip.toLong()
         sections.filter { it.type == 2L || it.type == 11L }.forEach { table ->
             val strings = sections[table.link.toInt()]
-            for (index in 0 until table.size / table.entrySize) {
+            val count = table.size / table.entrySize
+            val start = if (kind == "symbols") minOf(count, remaining).also { remaining -= it } else 0L
+            for (index in start until count) {
                 val s = buffer(table.offset + index * table.entrySize, 24)
                 val info = s.get(4).toInt() and 255; val binding = info ushr 4; val symbolType = info and 15
                 val section = u16(s, 6); val visibility = s.get(5).toInt() and 3
@@ -136,6 +158,7 @@ internal class ElfFile(private val file: File, private val checkCancelled: () ->
                 if (kind == "imports" && (!undefined || !global || table.type != 11L)) continue
                 if (kind == "exports" && (undefined || !global || visibility !in listOf(0, 3) || table.type != 11L)) continue
                 if (kind == "functions" && (undefined || symbolType != 2)) continue
+                if (remaining > 0) { remaining--; continue }
                 yield(buildJsonObject {
                     put("index", index); put("table", name(table)); put("name", string(strings, u32(s, 0))); put("type", symbolType)
                     put("binding", binding); put("visibility", visibility); put("undefined", undefined); put("section_index", section)

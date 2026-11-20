@@ -44,15 +44,15 @@ class RootDriverDevice(context: Context) : DriverDevice {
     override val isOpen: Boolean
         get() = binding?.let { it.opened && it.remote?.asBinder()?.isBinderAlive == true } == true
 
-    override fun open(): Boolean {
+    private fun rootRemote(): IRootDriver? {
         check(Looper.myLooper() != Looper.getMainLooper()) { "驱动连接必须在后台线程执行" }
-        if (isOpen) return true
+        binding?.remote?.takeIf { it.asBinder().isBinderAlive }?.let { return it }
         try {
             if (Shell.getCachedShell()?.isRoot == false) Shell.getCachedShell()?.close()
             if (!Shell.getShell().isRoot) {
                 lastError = "未获得 Root 授权"
                 Shell.getCachedShell()?.close()
-                return false
+                return null
             }
             val session = synchronized(lock) {
                 binding ?: Binding().also { next ->
@@ -64,17 +64,30 @@ class RootDriverDevice(context: Context) : DriverDevice {
                     }
                 }
             }
-            if (!session.ready.await(30, TimeUnit.SECONDS)) { lastError = "Root 驱动服务连接超时"; close(); return false }
-            val remote = session.remote ?: run { lastError = lastError ?: "Root 驱动服务未就绪"; close(); return false }
-            val connected = remote.open()
-            session.opened = connected && binding === session
-            lastError = if (session.opened) null else remote.lastError.ifBlank { "驱动连接失败" }
-            return session.opened
+            if (!session.ready.await(30, TimeUnit.SECONDS)) { lastError = "Root 服务连接超时"; close(); return null }
+            return session.remote ?: run { lastError = lastError ?: "Root 服务未就绪"; close(); null }
         } catch (error: Exception) {
             lastError = error.message ?: "Root 驱动服务不可用"
             close()
-            return false
+            return null
         }
+    }
+    override fun open(): Boolean {
+        if (isOpen) return true
+        return try {
+            val remote = rootRemote() ?: return false
+            val session = binding ?: return false
+            val connected = remote.open()
+            session.opened = connected && binding === session
+            lastError = if (session.opened) null else remote.lastError.ifBlank { "驱动连接失败" }
+            session.opened
+        } catch (error: Exception) { lastError = error.message; false }
+    }
+
+    /** User-space LLDB needs Root, but does not require /dev/qingwei_mcp to exist. */
+    fun debugCommand(action: String, arguments: String): String {
+        val remote = rootRemote() ?: error(lastError ?: "Root 服务未连接")
+        return remote.debugCommand(action, arguments).also { require(it.length <= 512000) { "调试响应过大" } }
     }
     override fun close() {
         val old = synchronized(lock) { binding.also { binding = null } } ?: return

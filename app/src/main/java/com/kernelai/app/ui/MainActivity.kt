@@ -188,6 +188,7 @@ class MainActivity : ComponentActivity() {
                                 entry<Route.BreakpointManager> { mainScreenEntry() }
                                 entry<Route.MemoryViewer> { StandalonePage { MemoryScreen() } }
                                 entry<Route.DisasmViewer> { StandalonePage { DisasmScreen() } }
+                                entry<Route.DebuggerViewer> { StandalonePage { com.kernelai.app.ui.screen.debugger.DebuggerScreen() } }
                                 entry<Route.LogViewer> {
                                     StandalonePage {
                                     LogScreen(
@@ -254,6 +255,7 @@ enum class SideNavDestination(
 ) {
     Memory("内存查看", Icons.Rounded.ListAlt, Route.MemoryViewer),
     Disasm("反汇编", Icons.Rounded.Code, Route.DisasmViewer),
+    Debugger("动态调试", Icons.Rounded.Code, Route.DebuggerViewer),
     Log("日志", Icons.Rounded.ListAlt, Route.LogViewer)
 }
 

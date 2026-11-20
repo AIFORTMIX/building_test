@@ -22,6 +22,7 @@ class KernelAiApplication : Application(), androidx.lifecycle.ViewModelStoreOwne
     val workspaceRepository by lazy { com.kernelai.app.data.WorkspaceRepository(this) }
     val toolResultStore by lazy { com.kernelai.app.mcp.ToolResultStore(java.io.File(filesDir, "artifacts/tool-results")) }
     internal val binaryTools by lazy { com.kernelai.app.mcp.WorkspaceBinaryTools(workspaceRepository, java.io.File(cacheDir, "binary-analysis")) }
+    internal val debugTools by lazy { com.kernelai.app.mcp.DebugTools { action, args -> (deviceNode as RootDriverDevice).debugCommand(action, args) } }
     lateinit var deviceNode: DriverDevice
         private set
     lateinit var mcpRuntime: McpRuntime
@@ -41,8 +42,8 @@ class KernelAiApplication : Application(), androidx.lifecycle.ViewModelStoreOwne
             it.isFile && it.name.startsWith("elf-") && it.name.endsWith(".snapshot")
         }?.forEach { it.delete() }
         deviceNode = RootDriverDevice(this)
-        mcpRuntime = McpRuntime(com.kernelai.app.mcp.McpTaskDispatcher(com.kernelai.app.mcp.PagedToolExecutor(com.kernelai.app.mcp.CompositeToolExecutor(McpToolExecutorImpl(deviceNode), com.kernelai.app.mcp.ProcRecordsTools(deviceNode), com.kernelai.app.mcp.WorkspaceTools(workspaceRepository), binaryTools), toolResultStore)), com.kernelai.app.mcp.McpAuditTrail(java.io.File(filesDir, "mcp-audit.json")))
-        aiToolExecutor = McpHttpToolExecutor(mcpRuntime::endpoint, com.kernelai.app.mcp.WorkspaceTools(workspaceRepository).getToolDefinitions() + com.kernelai.app.mcp.PagedToolExecutor.definition + com.kernelai.app.mcp.McpTaskDispatcher.definition + com.kernelai.app.mcp.ProcRecordsTools.definition + com.kernelai.app.mcp.WorkspaceBinaryTools.definitions)
+        mcpRuntime = McpRuntime(com.kernelai.app.mcp.McpTaskDispatcher(com.kernelai.app.mcp.PagedToolExecutor(com.kernelai.app.mcp.CompositeToolExecutor(McpToolExecutorImpl(deviceNode), com.kernelai.app.mcp.ProcRecordsTools(deviceNode), com.kernelai.app.mcp.WorkspaceTools(workspaceRepository), binaryTools, debugTools), toolResultStore)), com.kernelai.app.mcp.McpAuditTrail(java.io.File(filesDir, "mcp-audit.json")))
+        aiToolExecutor = McpHttpToolExecutor(mcpRuntime::endpoint, com.kernelai.app.mcp.WorkspaceTools(workspaceRepository).getToolDefinitions() + com.kernelai.app.mcp.PagedToolExecutor.definition + com.kernelai.app.mcp.McpTaskDispatcher.definition + com.kernelai.app.mcp.ProcRecordsTools.definition + com.kernelai.app.mcp.WorkspaceBinaryTools.definitions + com.kernelai.app.mcp.DebugTools.definitions)
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             private var started = 0
             override fun onActivityStarted(activity: android.app.Activity) {

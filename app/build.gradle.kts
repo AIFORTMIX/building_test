@@ -109,6 +109,42 @@ android {
     }
 }
 
+// Package the pinned NDK's LLDB server as an extracted native executable.
+// Variant generated sources keep the files read-only in Android Studio and carry task dependencies.
+abstract class PackageDebuggerTask : DefaultTask() {
+    @get:org.gradle.api.tasks.InputFile abstract val armServer: RegularFileProperty
+    @get:org.gradle.api.tasks.InputFile abstract val x86Server: RegularFileProperty
+    @get:org.gradle.api.tasks.InputFile abstract val notice: RegularFileProperty
+    @get:org.gradle.api.tasks.OutputDirectory abstract val jniDirectory: DirectoryProperty
+    @get:org.gradle.api.tasks.OutputDirectory abstract val assetsDirectory: DirectoryProperty
+    @org.gradle.api.tasks.TaskAction fun copyDebugger() {
+        listOf("arm64-v8a" to armServer, "x86_64" to x86Server).forEach { (abi, source) ->
+            val output = jniDirectory.file("$abi/libqingwei_debugger.so").get().asFile
+            output.parentFile.mkdirs(); source.get().asFile.copyTo(output, overwrite = true)
+        }
+        val output = assetsDirectory.file("licenses/ndk-debugger-notice.txt").get().asFile
+        output.parentFile.mkdirs(); notice.get().asFile.copyTo(output, overwrite = true)
+    }
+}
+val packageDebugger = tasks.register<PackageDebuggerTask>("packageDebugger") {
+    val ndkRoot = androidComponents.sdkComponents.ndkDirectory
+    val host = when {
+        System.getProperty("os.name").startsWith("Windows") -> "windows-x86_64"
+        System.getProperty("os.name").startsWith("Mac") -> "darwin-x86_64"
+        else -> "linux-x86_64"
+    }
+    val relative = "toolchains/llvm/prebuilt/$host/lib/clang/19/lib/linux"
+    armServer.set(ndkRoot.map { it.file("$relative/aarch64/lldb-server") })
+    x86Server.set(ndkRoot.map { it.file("$relative/x86_64/lldb-server") })
+    notice.set(ndkRoot.map { it.file("NOTICE.toolchain") })
+    jniDirectory.set(layout.buildDirectory.dir("generated/debugger/jniLibs"))
+    assetsDirectory.set(layout.buildDirectory.dir("generated/debugger/assets"))
+}
+androidComponents.onVariants { variant ->
+    variant.sources.jniLibs?.addGeneratedSourceDirectory(packageDebugger) { it.jniDirectory }
+    variant.sources.assets?.addGeneratedSourceDirectory(packageDebugger) { it.assetsDirectory }
+}
+
 dependencies {
     // Compose BOM (统一版本管理)
     implementation(platform(libs.androidx.compose.bom))

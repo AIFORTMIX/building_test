@@ -331,7 +331,7 @@ private fun ConversationBar(sessions: List<AiChatManager.SessionInfo>, activeId:
                     listOf("进程", "断点", "设置").forEachIndexed { index, name ->
                         DropdownMenuItem(text = { Text(name) }, onClick = { expanded = false; onOpenPage(index + 1) })
                     }
-                    listOf("工作区", "内存查看", "反汇编", "日志").forEach { name ->
+                    listOf("工作区", "内存查看", "反汇编", "动态调试", "日志").forEach { name ->
                         DropdownMenuItem(text = { Text(name) }, onClick = { expanded = false; onOpenUtility(name) })
                     }
                     DropdownMenuItem(text = { Text("删除当前会话", color = MiuixTheme.colorScheme.error) }, onClick = { expanded = false; confirmClear = true })

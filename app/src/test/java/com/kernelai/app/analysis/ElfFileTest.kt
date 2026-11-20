@@ -83,6 +83,33 @@ class ElfFileTest {
             ElfFile(file).use { elf -> assertTrue(elf.query("strings", 1400000, 10, "end-of-large-file")["entries"]!!.jsonArray.isNotEmpty()) }
         } finally { file.delete() }
     }
+    @Test fun rejectsOverlappingSectionsBeforeScanningAliasedSymbolTables() = rejects { header ->
+        val shoff = header.getLong(40).toInt(); val size = header.getShort(58).toInt() and 0xffff
+        val count = header.getShort(60).toInt() and 0xffff
+        val sections = (1 until count).map { shoff + it * size }.filter { header.getInt(it + 4) != 8 && header.getLong(it + 32) > 0 }
+        header.putLong(sections[1] + 24, header.getLong(sections[0] + 24))
+    }
+    @Test fun millionSymbolCursorContinuesWithoutReparsingEveryEarlierName() {
+        val file = File.createTempFile("elf-symbols-", ".so")
+        try {
+            val bytes = fixture.readBytes(); val header = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            val shoff = header.getLong(40).toInt(); val stride = header.getShort(58).toInt() and 0xffff
+            val count = header.getShort(60).toInt() and 0xffff
+            val symtab = (1 until count).map { shoff + it * stride }.single { header.getInt(it + 4) == 2 }
+            val offset = bytes.size.toLong() + 4096
+            val symbols = 1000010L
+            header.putLong(symtab + 24, offset); header.putLong(symtab + 32, symbols * 24); header.putLong(symtab + 56, 24)
+            file.writeBytes(bytes)
+            java.io.RandomAccessFile(file, "rw").use { it.setLength(offset + symbols * 24) }
+            ElfFile(file).use { elf ->
+                val page = elf.query("symbols", 1000001, 1, "")
+                assertEquals(1, page["entries"]!!.jsonArray.size)
+                assertTrue(page["has_more"]!!.jsonPrimitive.boolean)
+                val next = elf.query("symbols", page["next_offset"]!!.jsonPrimitive.int, 1, "")
+                assertNotEquals(page["entries"], next["entries"])
+            }
+        } finally { file.delete() }
+    }
     @Test fun mutatedHeadersFailOrProduceBoundedMetadataWithoutCrashing() {
         val random = Random(6257)
         repeat(100) {

@@ -3,11 +3,13 @@
 本仓库用于通过 GitHub Actions 编译 Qingwei ARM64 内核模块，并检查生成模块
 是否匹配所提供手机镜像的导出符号 CRC 和完整 kernel release。
 
+0.5.0 新增已授权工作区 ELF64 静态分析、真实 ARM64 解码和内置 LLDB 动态调试，界面、AI 与外部 MCP 共用工具。支持暂停、继续、单步、寄存器和软件/硬件断点。详细能力与测试边界见 [动态调试说明](docs/DYNAMIC_DEBUGGER.md)。
+
 0.4.0 完善 Miuix 毛玻璃界面、实际思考内容与正文时间线、详细用量面板和会话工作区；工具长结果完整保存并支持分页读取。外部 MCP 通过独立前台服务保活，恢复时保留端口和令牌，慢操作返回可查询的任务 ID。进程身份改变后停止沿用旧地址。使用和限制见 [Agent App 说明](docs/AGENT_APP.md)。
 
 毛玻璃组件、弹窗模糊的实现与迁移方法见 [毛玻璃与弹窗模糊实现方案](docs/毛玻璃与弹窗模糊实现方案.md)。
 
-驱动此前已在 [构建 44245345141](https://github.com/AIFORTMIX/building_test/actions/runs/44245345141) 通过完整 release 和 62 项版本符号 CRC 匹配。本次保持 KO、JNI 与 ioctl ABI 不变，无需重编译 KO。2026-11-18 用户反馈 0.2.0 真机基础验收通过、可以正常使用；长期稳定性和压力场景仍需持续验证。
+驱动此前已在 [构建 44245345141](https://github.com/AIFORTMIX/building_test/actions/runs/44245345141) 通过完整 release 和 62 项版本符号 CRC 匹配。0.5.0 新增反汇编 JNI 和用户态调试后端，保持 KO 与既有 ioctl ABI 不变，无需重编译 KO。2026-11-18 用户反馈 0.2.0 真机基础验收通过、可以正常使用；长期稳定性和压力场景仍需持续验证。
 
 [App 工作流](https://github.com/AIFORTMIX/building_test/actions/workflows/build-app.yml) 自动执行构建和模拟 AI → MCP → 设备边界联调、Android UI/JNI 检查。[0.4.0 验收构建 44551789205](https://github.com/AIFORTMIX/building_test/actions/runs/44551789205) 已通过 103 项 host 回归、26 项 Android 检查及 Debug/Release/Lint，并核对 APK 实际版本和主 App/测试包的 Compose 版本一致性。正式安装只需 Artifact 中的固定签名 `qingwei.apk`，不需要安装测试 APK 或另一个 MCP 宿主。具体证据见 [App 验证记录](docs/APP_VALIDATION.md)。
 
