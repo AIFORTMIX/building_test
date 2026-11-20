@@ -17,7 +17,8 @@ import java.nio.ByteOrder
  * 4. 解析内核返回的数据并格式化为 JSON 字符串
  */
 class McpToolExecutorImpl(
-    private val deviceNode: DriverDevice
+    private val deviceNode: DriverDevice,
+    private val decodeInstructions: (ByteArray, ULong, Int) -> JsonObject = com.kernelai.app.analysis.Arm64Disassembler::decode
 ) : McpToolExecutor {
 
     private val processQueries = ProcessQueries(deviceNode)
@@ -604,42 +605,34 @@ class McpToolExecutorImpl(
     }
 
     /**
-     * disassemble_at - 读取目标地址的原始字节数据，供外部反汇编
+     * disassemble_at - 读取并真实解码 ARM64 指令；保持进程身份核验。
      * ioctl: CMD_RAW_READ
      */
     private fun handleDisassembleAt(args: JsonObject): String {
         val pid = resolvePid(args)
         val address = args.requireHex("address")
         val count = args.getInt("count", 16)
-        require(count in 1..(MAX_MEM_READ_SIZE / 4)) { "无效的指令数量: $count" }
+        require(count in 1..256 && address.toULong() % 4uL == 0uL) { "指令数量应为 1–256，地址须四字节对齐" }
 
         // ARM64 每条指令 4 字节
         val readSize = count * 4
+        require(address.toULong() <= ULong.MAX_VALUE - readSize.toULong()) { "指令地址范围溢出" }
 
-        val packet = buildRawReadPacket(pid, address, readSize)
-        val ret = deviceNode.ioctl(IoctlCommands.CMD_RAW_READ, packet)
-        if (ret < 0) {
-            throw IOException("ioctl CMD_RAW_READ 失败, address=$address, ret=$ret")
-        }
-
-        val buf = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN)
-        val readPid = buf.int
-        buf.int // pad
-        val readAddr = buf.long
-        val requestedSize = buf.int
-        val actualSize = buf.int
-        buf.long // data_ptr
-        buf.long // data_size
-
-        val dataEnd = (40 + actualSize).coerceAtMost(packet.size)
-        val readData = packet.copyOfRange(40, dataEnd)
+        val readData = readMemoryBytes(pid, address, readSize)
+        val completeBytes = readData.size / 4 * 4
+        val decoded = if (completeBytes > 0) decodeInstructions(readData.copyOf(completeBytes), address.toULong(), completeBytes / 4)
+            else buildJsonObject { put("instructions", JsonArray(emptyList())); put("message", "读取结果不足一条完整指令，原始字节已保留") }
 
         return buildJsonObject {
             put("pid", pid)
             put("address", hex(address))
-            put("instruction_count", count)
-            put("byte_count", actualSize)
+            put("requested_count", count)
+            put("instruction_count", completeBytes / 4)
+            put("byte_count", readData.size)
             put("data", bytesToHex(readData))
+            put("partial_read", readData.size != readSize)
+            if (completeBytes < readData.size) put("trailing_bytes", bytesToHex(readData.copyOfRange(completeBytes, readData.size)))
+            decoded.forEach { (key, value) -> put(key, value) }
         }.toString()
     }
 

@@ -14,6 +14,6 @@ text = Path('android-smoke-results/instrumentation.log').read_text(errors='repla
 if re.search(r'FAILURES!!!|INSTRUMENTATION_FAILED|shortMsg=', text):
     raise SystemExit('Android instrumentation failed; see uploaded report')
 result = re.search(r'OK \((\d+) tests?\)', text)
-if not result or int(result[1]) < 26:
+if not result or int(result[1]) < 35:
     raise SystemExit('Android smoke suite did not complete all required tests')
 PY

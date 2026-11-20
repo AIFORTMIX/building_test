@@ -54,8 +54,8 @@ fun DeviceMemoryPanel(instructions: Boolean = false) {
         }
     }
     Column(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row { TextButton(onClick = { navigator.pop() }) { Text("返回") }; Text(if (instructions) "指令字节" else "内存查看", fontSize = 24.sp, fontWeight = FontWeight.Bold) }
-        Text(if (instructions) "读取真实 ARM64 指令字节，未内置反汇编器；可交给 AI 进一步分析。" else "直接查询驱动；空地址、失效 PID 和部分读取会明确报告。", fontSize = 12.sp)
+        Row { TextButton(onClick = { navigator.pop() }) { Text("返回") }; Text(if (instructions) "实时 ARM64 反汇编" else "内存查看", fontSize = 24.sp, fontWeight = FontWeight.Bold) }
+        Text(if (instructions) "读取当前绑定进程并用 Capstone 解码 ARM64 指令；不暂停进程，多次读取不是原子快照。" else "直接查询驱动；空地址、失效 PID 和部分读取会明确报告。", fontSize = 12.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextField(target, { target = it }, Modifier.weight(1f), label = "PID 或完整包名", singleLine = true)
             TextButton(onClick = { binding.bind(target) }, enabled = target.isNotBlank() && !binding.busy && !busy) { Text("绑定目标") }

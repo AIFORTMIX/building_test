@@ -1,7 +1,5 @@
 package com.kernelai.app.ui.screen.chat
 
-import android.os.Build
-import android.view.WindowManager
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -19,6 +17,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import com.kernelai.app.ui.components.LocalPanelBackdrop
 import top.yukonga.miuix.kmp.basic.Text
 
 /** Miuix content in a frosted window: dialogs cannot sample a sibling's window coordinates. */
@@ -29,32 +28,30 @@ internal fun GlassDialog(show: Boolean, onDismissRequest: () -> Unit, title: Str
     Dialog(onDismissRequest, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val view = LocalView.current
         val window = (view.parent as? DialogWindowProvider)?.window
-        val blurSupported = Build.VERSION.SDK_INT >= 31 &&
-            (view.context.getSystemService(WindowManager::class.java)?.isCrossWindowBlurEnabled == true)
-        DisposableEffect(window, blurSupported) {
-            window?.apply {
-                addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-                setDimAmount(.18f)
-                if (Build.VERSION.SDK_INT >= 31 && blurSupported) {
-                    addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-                    attributes = attributes.apply { blurBehindRadius = 36 }
-                }
-            }
-            onDispose { }
+        val controller = remember(window, view.context) {
+            window?.let { DialogBlurController(it, systemBlurAvailability(view.context)) }
         }
-        BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding()
+        DisposableEffect(controller) {
+            controller?.start()
+            onDispose { controller?.close() }
+        }
+        // Layer coordinates from the Activity are invalid in this independent window.
+        // Let the system blur behind the outer panel; inner cards use an opaque fallback.
+        CompositionLocalProvider(LocalGlassBackdrop provides null, LocalPanelBackdrop provides null) {
+            BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding()
             .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onDismissRequest),
             contentAlignment = Alignment.BottomCenter) {
             GlassSurface(null, Modifier.padding(12.dp).widthIn(max = 560.dp).fillMaxWidth()
                 .heightIn(max = (maxHeight - 24.dp).coerceAtLeast(80.dp))
                 .testTag("glass-dialog")
                 .clickable(remember { MutableInteractionSource() }, indication = null) {},
-                RoundedCornerShape(GlassStyle.Panel), windowBlur = blurSupported) {
+                RoundedCornerShape(GlassStyle.Panel), windowBlur = controller?.enabled == true) {
                 Column(Modifier.verticalScroll(rememberScrollState()).padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     title?.let { Text(it, fontSize = 20.sp, fontWeight = FontWeight.SemiBold) }
                     summary?.let { Text(it, fontSize = 13.sp, color = chatForeground().copy(alpha = .7f)) }
                     content()
                 }
+            }
             }
         }
     }

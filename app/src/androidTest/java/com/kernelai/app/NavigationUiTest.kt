@@ -1,6 +1,8 @@
 package com.kernelai.app
 
 import android.graphics.Bitmap
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -32,5 +34,19 @@ class NavigationUiTest {
         ui.onNodeWithContentDescription("对话列表").performClick()
         ui.onNodeWithTag("glass-dialog").assertIsDisplayed()
         ui.onNodeWithText("关闭").performClick()
+    }
+
+    @Test fun dialogCanReopenAcrossLandscapeAndPortraitRecreation() {
+        try {
+            for ((orientation, expected) in listOf(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE to Configuration.ORIENTATION_LANDSCAPE,
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT to Configuration.ORIENTATION_PORTRAIT)) {
+                ui.activityRule.scenario.onActivity { it.requestedOrientation = orientation }
+                ui.waitUntil(10000) { ui.activity.resources.configuration.orientation == expected }
+                ui.waitUntil(15000) { ui.onAllNodesWithContentDescription("对话列表").fetchSemanticsNodes().isNotEmpty() }
+                ui.onNodeWithContentDescription("对话列表").performClick()
+                ui.onNodeWithTag("glass-dialog").assertIsDisplayed()
+                ui.onNodeWithText("关闭").performScrollTo().performClick()
+            }
+        } finally { ui.activityRule.scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED } }
     }
 }

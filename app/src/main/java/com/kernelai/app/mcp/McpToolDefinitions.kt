@@ -107,7 +107,7 @@ object McpToolDefinitions {
         ),
         ToolDef(
             name = "disassemble_at",
-            description = "读取目标地址的原始字节数据，用于外部反汇编。返回十六进制字节。",
+            description = "读取并用 Capstone 解码目标的小端 ARM64 指令，返回原始字节、助记符、操作数和立即跳转目标。count=1..256，地址四字节对齐；先核实 expected_identity。不推断目标是 ARM32，也不伪造未知编码。",
             params = listOf(
                 Param("pid", "integer", "目标进程 PID", false),
                 Param("address", "string", "起始地址（十六进制）", true),

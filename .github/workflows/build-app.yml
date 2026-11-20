@@ -3,9 +3,9 @@ name: Build app and test simulated AI-MCP chain
 on:
   push:
     branches: [main]
-    paths: ['app/**', 'gradle/**', '*.gradle.kts', 'gradle.properties', 'gradlew*', 'tests/abi/**', '.github/workflows/build-app.yml', 'scripts/run_android_smoke.sh', 'scripts/check_compose_alignment.py']
+    paths: ['app/**', 'third_party/**', 'tests/analysis/**', 'gradle/**', '*.gradle.kts', 'gradle.properties', 'gradlew*', 'tests/abi/**', '.github/workflows/build-app.yml', 'scripts/run_android_smoke.sh', 'scripts/run_glass_compat.sh', 'scripts/check_compose_alignment.py']
   pull_request:
-    paths: ['app/**', 'gradle/**', '*.gradle.kts', 'gradle.properties', 'gradlew*', 'tests/abi/**', '.github/workflows/build-app.yml', 'scripts/run_android_smoke.sh', 'scripts/check_compose_alignment.py']
+    paths: ['app/**', 'third_party/**', 'tests/analysis/**', 'gradle/**', '*.gradle.kts', 'gradle.properties', 'gradlew*', 'tests/abi/**', '.github/workflows/build-app.yml', 'scripts/run_android_smoke.sh', 'scripts/run_glass_compat.sh', 'scripts/check_compose_alignment.py']
   workflow_dispatch:
 
 permissions:
@@ -139,4 +139,40 @@ jobs:
         with:
           name: qingwei-android-smoke-reports
           path: android-smoke-results/
+          if-no-files-found: warn
+
+  glass-compat:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [28, 31, 32]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: qingwei-apks
+          path: app-artifacts
+      - name: Enable hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Exercise fallback and dialog lifecycle on older Android
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: google_apis
+          profile: pixel_2
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          script: bash scripts/run_glass_compat.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qingwei-glass-api-${{ matrix.api }}
+          path: android-glass-results/
           if-no-files-found: warn

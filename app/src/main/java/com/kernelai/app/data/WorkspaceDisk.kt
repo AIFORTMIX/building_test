@@ -16,6 +16,8 @@ internal interface WorkspaceAccess {
     fun read(path: String): ByteArray
     fun write(path: String, bytes: ByteArray, expectedHash: String?, overwrite: Boolean)
     fun mkdir(path: String)
+    /** Binary reads are separate from the UTF-8 tools and are bounded by the analysis caller. */
+    fun openBinary(path: String): java.io.InputStream = read(path).inputStream()
 }
 
 internal object WorkspacePaths {
@@ -68,6 +70,11 @@ internal class WorkspaceDisk(private val root: File) : WorkspaceAccess {
             }
             output.toByteArray().also { require(it.size <= WorkspacePaths.MAX_TEXT) { "文件超过 256 KiB" } }
         }
+    }
+    override fun openBinary(path: String): java.io.InputStream {
+        val target = file(path)
+        require(target.isFile) { "文件不存在或不是普通文件" }
+        return Files.newInputStream(target.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
     }
     override fun write(path: String, bytes: ByteArray, expectedHash: String?, overwrite: Boolean) {
         require(bytes.size <= WorkspacePaths.MAX_TEXT)

@@ -58,6 +58,9 @@
 -keepclasseswithmembernames class com.kernelai.app.driver.** {
     native <methods>;
 }
+-keepclasseswithmembernames class com.kernelai.app.analysis.** {
+    native <methods>;
+}
 
 # ----- Miuix UI -----
 -keep class top.yukonga.miuix.kmp.** { *; }

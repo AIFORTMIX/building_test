@@ -58,6 +58,11 @@ internal class WorkspaceDocuments(private val resolver: ContentResolver, private
         val node = locate(WorkspacePaths.parts(path)); require(!node.directory && node.size <= WorkspacePaths.MAX_TEXT)
         return bytes(node.id)
     }
+    override fun openBinary(path: String): java.io.InputStream {
+        val node = locate(WorkspacePaths.parts(path))
+        require(!node.directory) { "目标是目录" }
+        return resolver.openInputStream(uri(node.id)) ?: error("文件无法读取，授权可能已失效")
+    }
     override fun mkdir(path: String) {
         var id = rootId
         WorkspacePaths.parts(path).forEach { name ->
