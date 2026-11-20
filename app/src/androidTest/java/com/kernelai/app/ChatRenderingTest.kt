@@ -131,6 +131,9 @@ class ChatRenderingTest {
         ui.waitUntil(10_000) { ui.onAllNodesWithText("会话一的回复").fetchSemanticsNodes().isNotEmpty() }
         ui.onNodeWithTag("chat-input").performTextInput("保留的草稿")
         ui.onNodeWithContentDescription("新对话").performClick()
+        // A new conversation also dismisses the IME. Insets can settle after the click
+        // even with system animations disabled; verify the actual visible final layout.
+        ui.waitUntil(10_000) { runCatching { ui.onNodeWithText("轻微 MCP").isDisplayed() }.getOrDefault(false) }
         ui.onNodeWithText("轻微 MCP").assertIsDisplayed()
         ui.onNodeWithText("新会话").performClick()
         ui.onNodeWithText("第一段提问").performClick()
