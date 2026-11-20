@@ -88,7 +88,7 @@ MCP 发布设备/计算、工作区文件、进程记录分页、工具结果归
 
 地址读取、搜索、指针链、写入和设置断点前先调用 `process_status`，用返回的 `process_identity` 作为 `expected_identity`。应用结合 boot ID、PID、启动时刻和可观察主程序布局检查身份，执行前后核对；指针链逐次读取前也核对。目标退出、重启、PID 复用、exec 或身份无法确认时，界面清除旧地址/缓存并要求重新绑定，AI 必须重新查询模块基址。不能只替换 PID 或令牌重用旧指针。
 
-身份核验不能发现所有动态 mmap、ART 对象移动，亦不能消除用户态核验与 ioctl 之间的竞态。已提交的写入/断点结果可能不确定，不自动回滚或重放。当前 KO/JNI 未改动，手机仍需在自己的测试进程完成实际 ioctl 验收。
+身份核验不能发现所有动态 mmap、ART 对象移动，亦不能消除用户态核验与 ioctl 之间的竞态。已提交的写入/断点结果可能不确定，不自动回滚或重放。当前 KO 与既有 ioctl ABI 未改动；0.5.0 的反汇编 JNI 随 APK 更新，手机仍需在自己的测试进程完成实际 ioctl 验收。
 
 内存单次读取最多 4096 字节，指针链最多 32 步，结构最多 64 字段。地址以无损字符串传输，检测 64 位加减溢出；支持 32/64 位指针、大小端、显式顶字节标签处理。部分读取、空指针和环会携带已完成轨迹返回错误，不补零或伪造字段。结构布局由调用者提供；候选指针不证明地址有效，也不能自动确认 Java/ART/C++ 类型。进程未暂停，多次读取不是原子快照。
 
@@ -133,6 +133,8 @@ Content-Type: application/json
 
 AI 和外部 MCP 使用相同的 `debug_*` 工具：先 capabilities、target_status，再 attach；保留 session_id，暂停和单步后查询 status，确认 stopped 后读取数据。结束时 detach 并检查 cleanup_confirmed。生成或工具失败不得重放副作用命令。内置 AI 默认提示词已说明流程，操作目的仍显示在工具调用链中。
 
-`debug_status` 的状态版本为 last_event；事件分页须使用 next_after_event，has_more_events 时继续读取。每页至多 20 项，内存保留最近 64 项；events_truncated 表示更旧历史已缺失，不伪称完整。目标退出、exec、身份变化或连接中断后旧会话不再接受地址操作。Root 服务空闲两分钟自动脱离；页面打开时会查询状态。
+`debug_status` 的状态版本为 last_event；事件分页须使用 next_after_event，has_more_events 时继续读取。每页至多 20 项，内存保留最近 64 项；events_truncated 表示更旧历史已缺失，不伪称完整。目标退出、exec、身份变化或连接中断后旧会话不再接受地址操作。调试会话空闲两分钟自动脱离；页面打开时会查询状态。
 
 连接在附加前必须成功启用 LLDB 的 QSetDetachOnError；超时和关闭使用 socket shutdown 后再 close，让阻塞读取线程及服务端都收到断线。即使客户端没收到脱离确认，也只报告清理未确认。测试专用 Root 启动器和本机目标程序仅在 Debug APK 中，Release 不包含这些入口。详见 [动态调试实现与验收](DYNAMIC_DEBUGGER.md)。
+
+固定签名 0.5.0 的构建、完整回归、覆盖安装和 AI 实际工具调用结果见 [验证记录](APP_VALIDATION_050.md)。真机的正式 Root 入口和长期后台仍待现场验收。

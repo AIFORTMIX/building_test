@@ -38,12 +38,14 @@
 - [x] 本地 123 项宿主测试无失败（Windows 环境跳过既有 1 项）；Debug/Release、Lint 和打包检查已通过，最终新增保护另有定向回归。
 - [x] 本地 API 37 完整 42 项 Android UI/JNI 验收通过，包含真实静态分析和动态调试、AI 调用、后台、媒体与聊天回归。
 - [x] 检查实际 APK 的 App/Test Compose 对齐、20 个打包结构和 24 条 ioctl、ARM64/x86_64 LLDB 与许可证；Release 不包含测试目标。
-- [ ] 最终代码推送后核验 GitHub Actions 的构建、全部 Android 检查及 API 28/31/32 矩阵，下载并独立核验固定签名的 0.5.0 安装包。
-- [ ] 正式包覆盖安装后检查已有会话/供应商/工作区保留，更新最终验证报告与 APK。
+- [x] 最终代码推送后核验 GitHub Actions 的构建、全部 Android 检查及 API 28/31/32 矩阵，下载并独立核验固定签名的 0.5.0 安装包。
+- [x] 正式包覆盖安装后检查已有会话/供应商/工作区保留，更新最终验证报告与 APK。
 - [x] 未验证的真机项单独保留，不标为已全部完成。
 
 ## 2026-11-21 当前证据
 
 此前 [Actions 44775927603](https://github.com/AIFORTMIX/building_test/actions/runs/44775927603) 在 b2faf42 上通过构建、API 35 的 35 项检查，以及 API 28/31/32 各 5 项玻璃兼容性检查；它只证明当时的静态分析与玻璃实现，最终 0.5.0 动态调试以新提交的运行结果为准。
+
+最终 [Actions 44794300482](https://github.com/AIFORTMIX/building_test/actions/runs/44794300482) 在 `3aaa7b5` 上全部通过：Linux 123 项宿主测试、API 35 的 42 项 Android 检查、API 28/31/32 各 5 项兼容性检查，以及构建/Lint/打包验证。正式包固定签名、版本与 SHA256 独立核验通过，覆盖安装保留会话、供应商和工作区文件，AI 在 R8 正式包中经真实 MCP 完成 ELF 查询和 ARM64 解码。详细记录见 [0.5.0 验证报告](APP_VALIDATION_050.md)。
 
 本地日志在仓库外 ../outputs/next-validation-2026-11-20/。42 项验收覆盖实际后端，并不证明正式 App 已获 Root 或厂商设备能长期保持后台连接。真机连接恢复后，继续执行上方两项硬件验收。

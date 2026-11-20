@@ -44,10 +44,30 @@
 
 ## 验证范围
 
-API 37 模拟器已经用自有多线程程序实际验证附加、线程暂停、当前寄存器、内存、单步、软件断点命中、移除、继续、暂停、脱离和目标退出。界面操作与模拟模型 → HTTP MCP → 实际 Root 后端 → 模型也已通过。exec 和事件分页回归也已在 API 37 完整 42 项验收中通过；最终 Release / CI 结果见后续验证记录。
+API 37 模拟器已经用自有多线程程序实际验证附加、线程暂停、当前寄存器、内存、单步、软件断点命中、移除、继续、暂停、脱离和目标退出。界面操作与模拟模型 → HTTP MCP → 实际 Root 后端 → 模型也已通过。exec 和事件分页回归也已在 API 37 完整 42 项验收中通过；最终 Release / CI 结果见 [0.5.0 验证记录](APP_VALIDATION_050.md)，API 35 完整 42 项及 API 28/31/32 兼容性矩阵已通过。
 
 AOSP 模拟器的 su 只授权 shell UID，不能把 App 未获 Root 的结果当成成功。仪器测试从 shell 以 Root 启动**同一份实际调试后端代码**，通过测试专用 Unix socket 调用，未模拟 ptrace 或改成演示数据；该启动入口和自有目标仅存在于 Debug 构建。正式 App 的 libsu 授权与 Binder 入口仍保留完整检查，需要在具有 Magisk / KernelSU 授权的真机验收。
 
 用户当前不能连接真机，因此 ARM64 真机动态调试、锁屏网络切换、长期 CPU/内存/耗电和厂商后台策略均保留待验收，不记为已完成。
+
+## 不连接电脑时的真机验收
+
+覆盖安装固定签名的 0.5.0 主 APK，在 Magisk / KernelSU 中允许该 App 的 Root 请求。既有 KO 可以继续使用；静态工作区分析和用户态 LLDB 不依赖 KO。
+
+可选自有测试程序为仓库 `tests/debugger/fixture.c`，用 `tests/debugger/build_fixture.ps1` 生成；本地交付副本在仓库外 `../outputs/qingwei-debug-target-arm64`，旁边有 SHA256 文件。程序输出四列：PID、`qingwei_debug_tick` 函数地址、marker 地址和 counter 地址。ARM64 真机执行尚待现场验证。
+
+将测试程序放入手机 Download，在手机终端先执行 `su` 取得 Root 提示符，再逐行运行：
+
+```sh
+cp /sdcard/Download/qingwei-debug-target-arm64 /data/local/tmp/qingwei-debug-target
+chmod 700 /data/local/tmp/qingwei-debug-target
+/data/local/tmp/qingwei-debug-target
+```
+
+保留该终端，切到 App 的「对话操作 → 动态调试」，输入刚输出的 PID，附加并暂停。确认 marker 地址读取的前八个字节为 `8877665544332211`；枚举线程，选择工作线程单步（主线程阻塞在 `pause()`，单步可能持续等待）。使用输出的 tick 地址设置长度为 4 的软件执行断点，继续后应收到真实停止事件。最后移除断点并脱离，检查 `cleanup_confirmed=true`，再回到终端按 Ctrl+C 结束自有测试程序。
+
+AI 也可执行相同流程，例如：“对 PID … 这个自有测试进程核实身份后附加，读取 marker 地址 … 的八字节，枚举线程并选择工作线程单步，最后脱离并确认清理结果。”AI 必须根据本次工具返回的身份和会话 ID 操作。
+
+外部 MCP 另行验收：开启接入后，在可信网络用实际客户端完成调用，切后台、锁屏、切换网络并查询调用记录；确认端口/令牌恢复和超时提示符合实际。强行停止、厂商省电策略及深度休眠不作无条件恢复承诺。记录机型、系统版本、Root 方案、耗时及日志后，才勾选实施清单中的真机项目。
 
 ELF 解析还检查节的文件区间不重叠，并为长名称提供有界缓存。大符号表分页不再受旧的百万游标门槛限制；空筛选会先跳过原始符号索引，避免为前面所有符号创建 JSON。节的布局约束依据 [ELF gABI](https://gabi.xinuos.com/elf/03-sheader.html)。

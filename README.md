@@ -11,7 +11,7 @@
 
 驱动此前已在 [构建 44245345141](https://github.com/AIFORTMIX/building_test/actions/runs/44245345141) 通过完整 release 和 62 项版本符号 CRC 匹配。0.5.0 新增反汇编 JNI 和用户态调试后端，保持 KO 与既有 ioctl ABI 不变，无需重编译 KO。2026-11-18 用户反馈 0.2.0 真机基础验收通过、可以正常使用；长期稳定性和压力场景仍需持续验证。
 
-[App 工作流](https://github.com/AIFORTMIX/building_test/actions/workflows/build-app.yml) 自动执行构建和模拟 AI → MCP → 设备边界联调、Android UI/JNI 检查。[0.4.0 验收构建 44551789205](https://github.com/AIFORTMIX/building_test/actions/runs/44551789205) 已通过 103 项 host 回归、26 项 Android 检查及 Debug/Release/Lint，并核对 APK 实际版本和主 App/测试包的 Compose 版本一致性。正式安装只需 Artifact 中的固定签名 `qingwei.apk`，不需要安装测试 APK 或另一个 MCP 宿主。具体证据见 [App 验证记录](docs/APP_VALIDATION.md)。
+[App 工作流](https://github.com/AIFORTMIX/building_test/actions/workflows/build-app.yml) 自动执行构建和模拟 AI → MCP → 实际工具联调、Android UI/JNI 检查。[0.5.0 验收构建 44794300482](https://github.com/AIFORTMIX/building_test/actions/runs/44794300482) 已通过 123 项 host 回归、42 项 Android 检查、API 28/31/32 各 5 项兼容性检查及 Debug/Release/Lint，并核对实际 APK 版本、固定签名、Compose 对齐和 LLDB/许可证打包。正式安装只需 Artifact 中的固定签名 `qingwei.apk`。具体证据、覆盖安装结果和待验真机项目见 [0.5.0 验证记录](docs/APP_VALIDATION_050.md)。
 
 ## 运行编译
 
