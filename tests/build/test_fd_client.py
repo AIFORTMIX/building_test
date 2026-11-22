@@ -1,5 +1,7 @@
 """Run the real C client, and connect it to the extracted real driver dispatcher."""
 import os
+import hashlib
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -159,6 +161,17 @@ def bridge_source():
 
 
 class FDClientRegression(unittest.TestCase):
+    def test_staged_client_and_project_uapi(self):
+        manifest = json.loads((FIXTURE / "workspace-source-sha256.json").read_text())
+        for path, digest in manifest["sha256_lf"].items():
+            data = (FIXTURE / Path(path).name).read_text(encoding="utf-8").encode()
+            self.assertEqual(hashlib.sha256(data).hexdigest(), digest, path)
+        project = (FIXTURE / "project_driver.c").read_text(encoding="utf-8")
+        header = (FIXTURE / "qingwei_uapi.h").read_text(encoding="utf-8")
+        embedded = project.split("/* BEGIN GENERATED UAPI */\n", 1)[1].split(
+            "\n/* END GENERATED UAPI */", 1)[0]
+        self.assertEqual(embedded.rstrip(), header.rstrip())
+
     def test_actual_client_and_driver_protocol(self):
         cc = os.environ.get("QW_TEST_CC") or shutil.which("clang") or shutil.which("gcc")
         cxx = os.environ.get("QW_TEST_CXX") or shutil.which("clang++") or shutil.which("g++")
