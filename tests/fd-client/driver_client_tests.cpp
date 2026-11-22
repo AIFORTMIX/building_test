@@ -209,6 +209,10 @@ int main() {
     for (auto& item:small) assert(!item.status);
     legacyNoBatch=false;
     assert(qingwei_clear_hook(oldBatch)<0 && errno==EOPNOTSUPP);
+    before=calls.load();
+    assert(qingwei_set_hook(oldBatch,123,4,2,nullptr,0)==-EOPNOTSUPP);
+    assert(qingwei_set_hw_bp(oldBatch,123,"target",4,0,0)==-EOPNOTSUPP);
+    assert(calls.load()==before); // a v1 hook cannot be reliably removed
     qingwei_close(oldBatch); qingwei_close(limited);
     qingwei_close(boundCopy); qingwei_close(bound);
     puts("PASS client ABI, target binding, negotiated batching, legacy fallback, malformed replies and FD lifetime");

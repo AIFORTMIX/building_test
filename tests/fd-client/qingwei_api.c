@@ -684,6 +684,13 @@ int qingwei_set_hw_bp(int fd, int pid, const char *pkg_name, unsigned long bp_ad
     pkt.addr = bp_addr;
     pkt.user_buf = (unsigned long)blr_buf;
 
+    qw_caps_t caps;
+    if (qingwei_get_caps(fd, &caps) < 0)
+        return -errno;
+    if (!caps.abi_version || !(caps.features & QW_FEATURE_HWBP)) {
+        errno = EOPNOTSUPP; /* v1 cannot reliably release the installed breakpoint */
+        return -EOPNOTSUPP;
+    }
     if (do_ioctl(fd, CMD_SET_HW_BP, &pkt) < 0)
         return -errno;
     return 0;
@@ -748,6 +755,13 @@ int qingwei_set_hook(int fd, int pid, unsigned long bp_addr, int mode, const int
             errno = EINVAL;
             return -EINVAL;
         }
+    qw_caps_t caps;
+    if (qingwei_get_caps(fd, &caps) < 0)
+        return -errno;
+    if (!caps.abi_version || !(caps.features & QW_FEATURE_HWBP)) {
+        errno = EOPNOTSUPP;
+        return -EOPNOTSUPP;
+    }
     cfg.reg_count = (uint32_t)reg_count;
     for (i = 0; i < reg_count; i++)
         cfg.regs[i] = (uint32_t)regs[i];
