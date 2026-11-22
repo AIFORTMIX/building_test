@@ -25,7 +25,7 @@ static bool legacyNoBatch, badBatchReply, badSnapshotCount, badSnapshotRegs;
 static int replyHookStatus;
 static unsigned capItems = QW_BATCH_MAX_ITEMS, capBytes = QW_BATCH_MAX_SIZE;
 static unsigned maxItems[64], maxBytes[64];
-static int legacyFd[64], lastPid;
+static int legacyFd[64], lastPid, lastSnapshotPid;
 static unsigned long failCommand;
 static std::atomic<int> calls{0}, inside{0};
 static std::atomic<bool> closed[64];
@@ -95,6 +95,7 @@ extern "C" int __wrap_ioctl(int fd, unsigned long command, ...) {
         auto* p = static_cast<qw_capture_read_t*>(arg); p->count_out = 0;
     } else if (command == CMD_READ_DEC_SNAP) {
         auto* p = static_cast<mem_packet_t*>(arg);
+        lastSnapshotPid = p->pid;
         p->offset_count = badSnapshotCount ? (int)p->size + 1 : badSnapshotRegs ? 1 : 0;
         if (badSnapshotRegs)
             reinterpret_cast<decoder_snap_t*>((uintptr_t)p->user_buf)[0].reg_count = 9;
@@ -176,6 +177,11 @@ int main() {
     assert(!qingwei_read_mem(boundCopy, 1, buffer, 4) && lastPid == 222);
     assert(!qingwei_bind_target(bound, 333, "target"));
     assert(!qingwei_read_mem(boundCopy, 1, buffer, 4) && lastPid == 333);
+    int register19 = 19;
+    assert(!qingwei_set_hook(bound,444,4,2,&register19,1));
+    assert(!qingwei_read_mem(boundCopy,1,buffer,4) && lastPid == 333);
+    qingwei_dec_snap_t separateSnapshot{};
+    assert(!qingwei_read_dec_snap(boundCopy,&separateSnapshot,1,&count) && lastSnapshotPid == 444);
     replyHookStatus = -EOPNOTSUPP;
     assert(qingwei_set_hook(bound, 333, 4, 2, nullptr, 0) == -EOPNOTSUPP && errno == EOPNOTSUPP);
     replyHookStatus = 0;
@@ -185,6 +191,8 @@ int main() {
     badSnapshotCount = false; badSnapshotRegs = true;
     assert(qingwei_read_dec_snap(bound, snapshots, 2, &count) < 0 && !count && errno == EPROTO);
     badSnapshotRegs = false;
+    assert(!qingwei_clear_hook(bound));
+    assert(!qingwei_read_dec_snap(boundCopy,&separateSnapshot,1,&count) && lastSnapshotPid == 333);
     qingwei_batch_item_t small[5]{};
     for (unsigned i=0;i<5;i++) { small[i].addr=1; small[i].size=4; small[i].out_offset=i*4; }
     capItems=2; capBytes=8;

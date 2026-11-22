@@ -131,7 +131,9 @@ int main() {
     assert(qingwei_set_hook(fd,1,4096,2,&reg,1)==-EFAULT);
     qingwei_hwbp_stats_t failedStats{};
     assert(!qingwei_get_hwbp_stats(fd,&failedStats) && !failedStats.active);
-    assert(!qingwei_set_hook(fd,1,4096,2,&reg,1));
+    assert(!qingwei_set_hook(fd,2,4096,2,&reg,1));
+    assert(!qingwei_read_mem(copy,4096+7,bytes,8)); // self-test must not retarget memory IO
+    assert(bridge_task_refs(1)==2 && bridge_task_refs(2)==2);
     qingwei_dec_snap_t snapshots[4]{}; uint32_t count=0;
     qingwei_close(fd); // worker duplicate keeps both target and hook alive
     assert(!qingwei_read_dec_snap(copy,snapshots,4,&count) && count==1);

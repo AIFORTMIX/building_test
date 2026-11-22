@@ -15,6 +15,8 @@ struct client_target {
     unsigned refs;
     int pid;
     char package[64];
+    int hook_pid;
+    char hook_package[64];
 };
 struct client_fd {
     int fd;
@@ -45,7 +47,8 @@ static int target_packet_command(unsigned long cmd) {
 }
 static int do_ioctl(int fd, unsigned long cmd, void *pkt) {
     int ret, saved, changes_target = cmd == CMD_GET_BASE || cmd == CMD_BIND_TARGET ||
-                                     cmd == CMD_SET_HW_BP || cmd == CMD_SET_HOOK_CFG;
+                                     cmd == CMD_SET_HW_BP || cmd == CMD_SET_HOOK_CFG ||
+                                     cmd == CMD_CLEAR_HOOK;
     struct client_fd *c;
     if (changes_target)
         pthread_rwlock_wrlock(&fd_lock);
@@ -60,8 +63,12 @@ static int do_ioctl(int fd, unsigned long cmd, void *pkt) {
     if (target_packet_command(cmd) && pkt) {
         mem_packet_t *p = pkt;
         if (p->pid <= 0 && !p->pkg_name[0]) {
-            p->pid = c->target->pid;
-            memcpy(p->pkg_name, c->target->package, sizeof(p->pkg_name));
+            int hook = (cmd == CMD_SET_BLR_ADDRS || cmd == CMD_QUERY_SNAPSHOT ||
+                        cmd == CMD_READ_DEC_SNAP) &&
+                       (c->target->hook_pid > 0 || c->target->hook_package[0]);
+            p->pid = hook ? c->target->hook_pid : c->target->pid;
+            memcpy(p->pkg_name, hook ? c->target->hook_package : c->target->package,
+                   sizeof(p->pkg_name));
             if (p->pid <= 0 && !p->pkg_name[0] && !(c->caps.features & QW_FEATURE_PER_FILE)) {
                 pthread_rwlock_unlock(&fd_lock);
                 errno = ENOTCONN;
@@ -77,12 +84,24 @@ static int do_ioctl(int fd, unsigned long cmd, void *pkt) {
     }
     ret = ioctl(fd, cmd, pkt);
     saved = ret < 0 ? errno : 0;
-    if (ret >= 0 && changes_target &&
+    if (ret >= 0 && cmd == CMD_CLEAR_HOOK) {
+        c->target->hook_pid = 0;
+        memset(c->target->hook_package, 0, sizeof(c->target->hook_package));
+    } else if (ret >= 0 && changes_target &&
         (cmd != CMD_SET_HOOK_CFG ||
          ((const hw_bp_cfg_t *)(uintptr_t)((const mem_packet_t *)pkt)->user_buf)->ret == 0)) {
         const mem_packet_t *p = pkt;
-        c->target->pid = p->pid > 0 ? p->pid : 0;
-        memcpy(c->target->package, p->pkg_name, sizeof(c->target->package));
+        if (cmd == CMD_SET_HW_BP || cmd == CMD_SET_HOOK_CFG) {
+            c->target->hook_pid = p->pid > 0 ? p->pid : 0;
+            memcpy(c->target->hook_package, p->pkg_name, sizeof(c->target->hook_package));
+        } else {
+            c->target->pid = p->pid > 0 ? p->pid : 0;
+            memcpy(c->target->package, p->pkg_name, sizeof(c->target->package));
+            if (cmd == CMD_BIND_TARGET) {
+                c->target->hook_pid = 0;
+                memset(c->target->hook_package, 0, sizeof(c->target->hook_package));
+            }
+        }
     }
     pthread_rwlock_unlock(&fd_lock);
     errno = saved;
