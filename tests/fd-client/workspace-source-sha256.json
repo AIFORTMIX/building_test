@@ -1,0 +1,8 @@
+{
+  "app/src/main/cpp/qingwei_api.c": "451e6639cd327e542682b0780688c307f3daa7fcac5c2ff2a5d58c9944fc2a25",
+  "app/src/main/cpp/qingwei_api.h": "ce6272a880dd73340f2c3fe6e9d323392f8ffdbcc9f385fb3a5b82a59d8e272e",
+  "app/src/main/cpp/qingwei_uapi.h": "057fcee02b02e637af77e21da2c9647191a2f2dea9539663a96f1b62266fe145",
+  "app/src/main/cpp/overlay_navigation.h": "b103c17f36506cdd0471460536544f50432fc4b1deaa509abf2d64ee040061c2",
+  "app/src/main/cpp/memory_search.h": "95552beccfe395f7f207082f5a0212614edb2d29a5c446273a62734f13f4157f",
+  "tests/native/driver_client_tests.cpp": "823d29c8b5c45a90e3404e6766a441ea6fe1a8906dcee6383ee0fb87dd7b487c"
+}

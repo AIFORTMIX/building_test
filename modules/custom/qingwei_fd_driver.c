@@ -20,6 +20,7 @@
 #include <linux/ktime.h>
 #include <linux/kprobes.h>
 #include <linux/capability.h>
+#include <linux/compat.h>
 #include <linux/user_namespace.h>
 #include <linux/pid.h>
 #include <linux/dcache.h>
@@ -178,6 +179,21 @@ typedef struct {
 #define CMD_READ_DEC_SNAP      _IOWR(MEM_IOCTL_MAGIC, 18, mem_packet_t)
 #define CMD_SET_HOOK_CFG       _IOWR(MEM_IOCTL_MAGIC, 19, mem_packet_t)
 
+/* Additive v2 negotiation; legacy ARM64 command layouts remain unchanged. */
+#define QW_ABI_VERSION 2
+#define QW_FEATURE_BATCH_LARGE (1U << 0)
+#define QW_FEATURE_HWBP        (1U << 1)
+#define QW_FEATURE_CAPTURE     (1U << 2)
+#define QW_FEATURE_PER_FILE    (1U << 3)
+#define QW_FEATURE_BIND_TARGET (1U << 4)
+typedef struct {
+    uint32_t abi_version, features, max_items, max_out_size;
+    uint32_t max_item_size, reserved[3];
+} qw_caps_t;
+#define CMD_GET_CAPS     _IOR(MEM_IOCTL_MAGIC, 20, qw_caps_t)
+#define CMD_CLEAR_HOOK   _IO(MEM_IOCTL_MAGIC, 21)
+#define CMD_BIND_TARGET  _IOWR(MEM_IOCTL_MAGIC, 22, mem_packet_t)
+
 #define QW_BATCH_MAX_ITEMS 512
 #define QW_BATCH_MAX_SIZE  (2 * 1024 * 1024)
 
@@ -212,6 +228,13 @@ typedef struct {
 /* ---------- 全局变量 ---------- */
 /* Each lookup returns its own referenced task. No global borrowed-task cache. */
 
+struct qw_file {
+    struct mutex lock;
+    struct task_struct *task;
+    int pid;
+    char name[64];
+};
+
 static atomic64_t g_total_cpu_ns = ATOMIC64_INIT(0);
 static atomic64_t g_call_count = ATOMIC64_INIT(0);
 
@@ -233,10 +256,19 @@ typedef struct {
 	int ret;   /* 驱动写回的错误码，用户态可读；0=成功 */
 } hw_bp_cfg_t;
 
+_Static_assert(sizeof(mem_packet_t) == 168, "mem_packet ARM64 wire layout");
+_Static_assert(sizeof(mem_batch_packet_t) == 104, "batch packet wire layout");
+_Static_assert(sizeof(mem_batch_item_t) == 24, "batch item wire layout");
+_Static_assert(sizeof(hw_bp_cfg_t) == 56, "HWBP config wire layout");
+_Static_assert(sizeof(decoder_snap_t) == 88, "decoder snapshot wire layout");
+
 /* ---------- HW Breakpoint 状态 ---------- */
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
 static DEFINE_MUTEX(g_hw_bp_lock);
-static struct perf_event *g_hw_bp_events[64] = {NULL};   /* 每线程一个 perf 断点（perf 用户断点只绑单线程，须遍历进程所有线程才能命中） */
+static struct qw_file *g_hw_owner;
+/* Bound registration resources without truncating normal game thread groups. */
+#define QW_HW_MAX_THREADS 1024
+static struct perf_event *g_hw_bp_events[QW_HW_MAX_THREADS] = {NULL};   /* 每线程一个 perf 断点（perf 用户断点只绑单线程，须遍历进程所有线程才能命中） */
 static int g_hw_bp_event_count = 0;
 static unsigned long g_hw_bp_addr = 0;
 static struct task_struct *g_hw_bp_target_task = NULL;
@@ -422,6 +454,39 @@ static struct task_struct *get_target_task(int pid, const char *pkg_name)
     if (target)
         put_pid(target);
     return task ? task : ERR_PTR(-ESRCH);
+}
+
+/* Called with ctx->lock held. Retain the exact task identity until rebind or
+ * final file release; numeric PID reuse must not silently change an attachment. */
+static struct task_struct *qw_context_target(struct qw_file *ctx, int pid,
+                                             const char *name, bool fresh)
+{
+    struct task_struct *task;
+    bool implicit = pid <= 0 && !name[0];
+    bool matches = ctx && ctx->task &&
+        (implicit || (pid > 0 && pid == ctx->pid) ||
+         (pid <= 0 && name[0] && !strcmp(name, ctx->name)));
+
+    if (!ctx)
+        return get_target_task(pid, name);
+    if (!fresh && matches) {
+        if (!pid_alive(ctx->task))
+            return ERR_PTR(-ESRCH);
+        get_task_struct(ctx->task);
+        return ctx->task;
+    }
+    if (implicit)
+        return ERR_PTR(-ENOTCONN);
+    task = get_target_task(pid, name);
+    if (IS_ERR(task))
+        return task;
+    if (ctx->task)
+        put_task_struct(ctx->task);
+    ctx->task = task;
+    get_task_struct(task);
+    ctx->pid = task_pid_vnr(task);
+    strscpy(ctx->name, name, sizeof(ctx->name));
+    return task;
 }
 
 /* ---------- 获取模块基址 ---------- */
@@ -671,6 +736,7 @@ static void hw_bp_cleanup_locked(void)
         g_hw_bp_events[i] = NULL;
     }
     g_hw_bp_event_count = 0;
+    g_hw_owner = NULL;
     if (g_hw_bp_target_task) {
         put_task_struct(g_hw_bp_target_task);
         g_hw_bp_target_task = NULL;
@@ -705,7 +771,7 @@ static void hw_bp_cleanup(void)
 
 static int hw_bp_setup(struct task_struct *task, unsigned long bp_addr,
                         unsigned long blr_x8, unsigned long blr_x9, int mode,
-                        const hw_bp_cfg_t *cfg)
+                        const hw_bp_cfg_t *cfg, struct qw_file *owner)
 {
     struct perf_event_attr attr;
     struct task_struct **threads, *t;
@@ -727,6 +793,10 @@ static int hw_bp_setup(struct task_struct *task, unsigned long bp_addr,
         return -ENOMEM;
 
     mutex_lock(&g_hw_bp_lock);
+    if (g_hw_owner && g_hw_owner != owner) {
+        ret = -EBUSY;
+        goto out;
+    }
     if (!g_register_user_hw_bp || !g_unregister_hw_bp) {
         ret = -EOPNOTSUPP;
         goto out;
@@ -781,6 +851,7 @@ static int hw_bp_setup(struct task_struct *task, unsigned long bp_addr,
     g_blr_x8_addr = blr_x8;
     g_blr_x9_addr = blr_x9;
     g_hw_bp_active = true;
+    g_hw_owner = owner;
 out:
     mutex_unlock(&g_hw_bp_lock);
     for (i = 0; i < count; i++)
@@ -790,14 +861,17 @@ out:
 }
 
 static int hw_bp_update_blr(struct task_struct *task,
-                             unsigned long blr_x8, unsigned long blr_x9)
+                             unsigned long blr_x8, unsigned long blr_x9,
+                             struct qw_file *owner)
 {
     int ret = 0;
 
     mutex_lock(&g_hw_bp_lock);
-    if (!g_hw_bp_active || !g_hw_bp_target_task)
+    if (g_hw_owner && g_hw_owner != owner)
+        ret = -EPERM;
+    else if (!g_hw_bp_active || !g_hw_bp_target_task)
         ret = -ENODEV;
-    else if (g_hw_bp_target_task != task)
+    else if (g_hw_bp_target_task->group_leader != task->group_leader)
         ret = -EINVAL;
     else {
         g_blr_x8_addr = blr_x8;
@@ -837,9 +911,10 @@ static int hw_bp_query_snapshot(unsigned long obj_addr,
 static void hw_bp_cleanup(void) {}
 static int hw_bp_setup(struct task_struct *task, unsigned long bp_addr,
                         unsigned long blr_x8, unsigned long blr_x9, int mode,
-                        const hw_bp_cfg_t *cfg) { return -EOPNOTSUPP; }
+                        const hw_bp_cfg_t *cfg, struct qw_file *owner) { return -EOPNOTSUPP; }
 static int hw_bp_update_blr(struct task_struct *task,
-                              unsigned long blr_x8, unsigned long blr_x9) { return -ENOSYS; }
+                              unsigned long blr_x8, unsigned long blr_x9,
+                              struct qw_file *owner) { return -EOPNOTSUPP; }
 static int hw_bp_query_snapshot(unsigned long obj_addr,
                                  u32 *x_raw, u32 *y_raw, u32 *z_raw) { return -ENOSYS; }
 #endif /* CONFIG_HAVE_HW_BREAKPOINT */
@@ -987,11 +1062,51 @@ static long device_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     u64 start = ktime_get_ns();
     long ret = 0;
+    struct qw_file *ctx = filp->private_data;
+    bool locked = false;
     bool capture_cmd = cmd == CMD_CAPTURE_START || cmd == CMD_CAPTURE_STOP ||
                        cmd == CMD_CAPTURE_READ || cmd == CMD_CAPTURE_STATS;
 
     if (!capture_cmd && !ns_capable(&init_user_ns, CAP_SYS_PTRACE)) {
         ret = -EPERM;
+        goto out;
+    }
+
+    if (!capture_cmd) {
+        if (!ctx) { ret = -ENODEV; goto out; }
+        if (mutex_lock_interruptible(&ctx->lock)) {
+            ret = -ERESTARTSYS;
+            goto out;
+        }
+        locked = true;
+    }
+    if (cmd == CMD_GET_CAPS) {
+        qw_caps_t caps = {
+            .abi_version = QW_ABI_VERSION,
+            .features = QW_FEATURE_BATCH_LARGE | QW_FEATURE_PER_FILE |
+                        QW_FEATURE_BIND_TARGET,
+            .max_items = QW_BATCH_MAX_ITEMS, .max_out_size = QW_BATCH_MAX_SIZE,
+            .max_item_size = QW_BATCH_MAX_SIZE,
+        };
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
+        if (g_register_user_hw_bp && g_unregister_hw_bp)
+            caps.features |= QW_FEATURE_HWBP;
+#endif
+        /* Capture remains outside this repair and is not advertised as safe. */
+        ret = copy_to_user((void __user *)arg, &caps, sizeof(caps)) ? -EFAULT : 0;
+        goto out;
+    }
+    if (cmd == CMD_CLEAR_HOOK) {
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
+        mutex_lock(&g_hw_bp_lock);
+        if (g_hw_owner && g_hw_owner != ctx)
+            ret = -EPERM;
+        else
+            hw_bp_cleanup_locked();
+        mutex_unlock(&g_hw_bp_lock);
+#else
+        ret = -EOPNOTSUPP;
+#endif
         goto out;
     }
 
@@ -1074,7 +1189,7 @@ static long device_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             ret = -EINVAL;
             goto out;
         }
-        task = get_target_task(tpkt.pid, tpkt.pkg_name);
+        task = qw_context_target(ctx, tpkt.pid, tpkt.pkg_name, false);
         if (IS_ERR(task)) {
             ret = PTR_ERR(task);
             goto out;
@@ -1144,7 +1259,7 @@ static long device_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             ret = -EINVAL;
             goto out;
         }
-        task = get_target_task(bpkt.pid, bpkt.pkg_name);
+        task = qw_context_target(ctx, bpkt.pid, bpkt.pkg_name, false);
         if (IS_ERR(task)) {
             ret = PTR_ERR(task);
             goto out;
@@ -1167,7 +1282,7 @@ static long device_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             int r;
 
             items[i].status = -EINVAL;
-            if (!size || size > PAGE_SIZE || offset > bpkt.out_size ||
+            if (!size || size > QW_BATCH_MAX_SIZE || offset > bpkt.out_size ||
                 size > bpkt.out_size - offset)
                 continue;
             r = manual_read_memory(task, items[i].addr,
@@ -1202,7 +1317,31 @@ batch_out:
         ret = -EINVAL;
         goto out;
     }
-    task = get_target_task(pkt.pid, pkt.pkg_name);
+    if (cmd == CMD_BIND_TARGET) {
+        if (pkt.pid <= 0 && !pkt.pkg_name[0]) { ret = -EINVAL; goto out; }
+        task = get_target_task(pkt.pid, pkt.pkg_name);
+        if (IS_ERR(task)) { ret = PTR_ERR(task); goto out; }
+        pkt.pid = task_pid_vnr(task);
+        if (copy_to_user((void __user *)arg, &pkt, sizeof(pkt))) {
+            put_task_struct(task);
+            ret = -EFAULT;
+            goto out;
+        }
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
+        mutex_lock(&g_hw_bp_lock);
+        if (g_hw_owner == ctx && g_hw_bp_target_task &&
+            g_hw_bp_target_task->group_leader != task->group_leader)
+            hw_bp_cleanup_locked();
+        mutex_unlock(&g_hw_bp_lock);
+#endif
+        if (ctx->task)
+            put_task_struct(ctx->task);
+        ctx->task = task; /* transfer the lookup reference after successful reply */
+        ctx->pid = pkt.pid;
+        strscpy(ctx->name, pkt.pkg_name, sizeof(ctx->name));
+        goto out;
+    }
+    task = qw_context_target(capture_cmd ? NULL : ctx, pkt.pid, pkt.pkg_name, false);
     if (IS_ERR(task)) {
         ret = PTR_ERR(task);
         goto out;
@@ -1313,7 +1452,7 @@ batch_out:
         }
         /* offset_count 作为 mode：0=坐标hook 2=解码器输出hook */
         ret = hw_bp_setup(task, bp_addr, blr_addrs[0], blr_addrs[1],
-                          pkt.offset_count, NULL);
+                          pkt.offset_count, NULL, ctx);
         break;
     }
 
@@ -1325,7 +1464,7 @@ batch_out:
             ret = -EFAULT;
             break;
         }
-        ret = hw_bp_update_blr(task, blr_addrs[0], blr_addrs[1]);
+        ret = hw_bp_update_blr(task, blr_addrs[0], blr_addrs[1], ctx);
         break;
     }
 
@@ -1334,7 +1473,16 @@ batch_out:
         u32 result[3] = {0, 0, 0};
         int status;
 
-        status = hw_bp_query_snapshot(obj_addr, &result[0], &result[1], &result[2]);
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
+        mutex_lock(&g_hw_bp_lock);
+        if (g_hw_owner && g_hw_owner != ctx)
+            status = -EPERM;
+        else
+            status = hw_bp_query_snapshot(obj_addr, &result[0], &result[1], &result[2]);
+        mutex_unlock(&g_hw_bp_lock);
+#else
+        status = -EOPNOTSUPP;
+#endif
 
         if (pkt.user_buf && copy_to_user((void __user *)pkt.user_buf,
                 result, sizeof(result))) {
@@ -1444,6 +1592,11 @@ batch_out:
             ret = -EINVAL;
             break;
         }
+        mutex_lock(&g_hw_bp_lock);
+        ret = g_hw_owner && g_hw_owner != ctx ? -EPERM : 0;
+        mutex_unlock(&g_hw_bp_lock);
+        if (ret)
+            break;
         want = pkt.size;
         tmp = kvcalloc(want, sizeof(*tmp), GFP_KERNEL);
         if (!tmp) { ret = -ENOMEM; break; }
@@ -1478,10 +1631,19 @@ batch_out:
             break;
         }
         /* Reuse the referenced outer task; never borrow a task after RCU. */
-        ret = hw_bp_setup(task, cfg.bp_addr, 0, 0, cfg.mode, &cfg);
+        ret = hw_bp_setup(task, cfg.bp_addr, 0, 0, cfg.mode, &cfg, ctx);
         cfg.ret = ret;
-        if (copy_to_user((void __user *)pkt.user_buf, &cfg, sizeof(cfg)))
+        if (copy_to_user((void __user *)pkt.user_buf, &cfg, sizeof(cfg))) {
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
+            if (!ret) {
+                mutex_lock(&g_hw_bp_lock);
+                if (g_hw_owner == ctx)
+                    hw_bp_cleanup_locked();
+                mutex_unlock(&g_hw_bp_lock);
+            }
+#endif
             ret = -EFAULT;
+        }
         break;
     }
 
@@ -1496,6 +1658,8 @@ batch_out:
     kvfree(kbuf);
 
 out:
+    if (locked)
+        mutex_unlock(&ctx->lock);
     {
         u64 delta = ktime_get_ns() - start;
         atomic64_add(delta, &g_total_cpu_ns);
@@ -1504,10 +1668,45 @@ out:
     return ret;
 }
 
+/* Last close of an open file also releases any breakpoint it owns. dup()
+ * descriptors intentionally share the file's target and hardware ownership. */
+static int device_open(struct inode *inode, struct file *file)
+{
+    struct qw_file *ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+
+    if (!ctx)
+        return -ENOMEM;
+    mutex_init(&ctx->lock);
+    file->private_data = ctx;
+    return 0;
+}
+
+static int device_release(struct inode *inode, struct file *file)
+{
+    struct qw_file *ctx = file->private_data;
+
+#ifdef CONFIG_HAVE_HW_BREAKPOINT
+    mutex_lock(&g_hw_bp_lock);
+    if (g_hw_owner == ctx)
+        hw_bp_cleanup_locked();
+    mutex_unlock(&g_hw_bp_lock);
+#endif
+    if (ctx->task)
+        put_task_struct(ctx->task);
+    kfree(ctx);
+    return 0;
+}
+
 /* ---------- 设备操作 ---------- */
 static struct file_operations fops = {
     .owner = THIS_MODULE,
+    .open = device_open,
+    .release = device_release,
     .unlocked_ioctl = device_ioctl,
+#ifdef CONFIG_COMPAT
+    /* Rebuilt 32-bit clients use the same fixed/aligned 64-bit wire layout. */
+    .compat_ioctl = compat_ptr_ioctl,
+#endif
 };
 
 static struct miscdevice misc_dev = {

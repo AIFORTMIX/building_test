@@ -65,6 +65,9 @@ typedef _Bool bool;
 #define ENOENT 2
 #define ENOTTY 25
 #define EPERM 1
+#define EBUSY 16
+#define ENOTCONN 107
+#define ERESTARTSYS 512
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof((x)[0]))
 #define min_t(t,a,b) ((t)(a)<(t)(b)?(t)(a):(t)(b))
 #define check_add_overflow(a,b,out) __builtin_add_overflow((a),(b),(out))
@@ -93,6 +96,7 @@ extern int memcmp(const void *,const void *,size_t);
 extern size_t strlen(const char *);
 extern int strcmp(const char *,const char *);
 extern int strncmp(const char *,const char *,size_t);
+static long strscpy(char *d,const char *s,size_t n) { size_t i; for(i=0;i+1<n && s[i];i++) d[i]=s[i]; d[i]=0; return i; }
 extern int printf(const char *,...);
 extern void exit(int);
 static void report_failure(int line,const char *s) {
@@ -106,8 +110,10 @@ typedef struct { int held; } spinlock_t;
 #define DEFINE_MUTEX(n) struct mutex n
 #define DEFINE_SPINLOCK(n) spinlock_t n
 #define __SPIN_LOCK_UNLOCKED(n) {0}
+static void mutex_init(struct mutex *m) { m->held=0; }
 static void mutex_lock(struct mutex *m) { CHECK(!m->held); m->held=1; }
 static void mutex_unlock(struct mutex *m) { CHECK(m->held); m->held=0; }
+static int mutex_lock_interruptible(struct mutex *m) { mutex_lock(m); return 0; }
 #define spin_lock_irqsave(l,f) do { (f)=irqs_disabled; CHECK(!(l)->held); \
     (l)->held=1; irqs_disabled=1; } while(0)
 #define spin_unlock_irqrestore(l,f) do { CHECK((l)->held); \
@@ -163,7 +169,7 @@ struct task_struct {
     struct task_struct *group_leader, *next;
 };
 struct pid { int id; };
-static struct task_struct tasks[66];
+static struct task_struct tasks[1026];
 static unsigned char remote_mem[16384];
 static int find_pid_by_name(const char *s) { return s[0]?1:-EINVAL; }
 static struct pid pid_ref;
@@ -176,6 +182,8 @@ static struct task_struct *get_pid_task(struct pid *p,int type) {
 static void put_pid(struct pid *p) {}
 static void get_task_struct(struct task_struct *t) { ++t->refs; }
 static void put_task_struct(struct task_struct *t) { CHECK(t->refs>1); --t->refs; }
+static int pid_alive(struct task_struct *t) { return t->pid>0; }
+static int task_pid_vnr(struct task_struct *t) { return t->pid; }
 #define for_each_thread(leader,t) for((t)=(leader);(t);(t)=(t)->next)
 static int access_process_vm(struct task_struct *t,unsigned long a,void *b,int n,unsigned f) {
     int actual=n;
@@ -188,7 +196,8 @@ static int access_process_vm(struct task_struct *t,unsigned long a,void *b,int n
     else memcpy(b,remote_mem+a-4096,actual);
     return actual;
 }
-struct file { int unused; };
+struct inode { int unused; };
+struct file { void *private_data; };
 static struct { struct { unsigned long size; } core_layout; } module;
 #define THIS_MODULE (&module)
 struct pt_regs { unsigned long regs[31], sp, pc; };
@@ -218,9 +227,11 @@ static void reset(void) {
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
     hw_bp_cleanup();
 #endif
+    if(test_context.task) put_task_struct(test_context.task);
+    memset(&test_context,0,sizeof(test_context));
     CHECK(!live_allocs && !irqs_disabled && !rcu_depth);
     authorized=1; short_access=0; access_calls=0; copy_fail_at=0; copy_count=0;
-    for(i=0;i<66;i++) {
+    for(i=0;i<1026;i++) {
         CHECK(tasks[i].refs==0 || tasks[i].refs==1);
         tasks[i].pid=i+1; tasks[i].refs=1; tasks[i].group_leader=&tasks[0];
         tasks[i].next=NULL;
@@ -262,7 +273,7 @@ static void test_memory(void) {
     short_access=0;
     fail_alloc=1;
     CHECK(device_ioctl(NULL,CMD_READ_MEM,(unsigned long)&p)==-ENOMEM);
-    CHECK(!live_allocs && tasks[0].refs==1);
+    CHECK(!live_allocs && tasks[0].refs==2);
 }
 static void test_pointer_chain(void) {
     mem_packet_t p={0}; unsigned long a=5000,b=6000; unsigned char out[4];
@@ -273,7 +284,7 @@ static void test_pointer_chain(void) {
     CHECK(!memcmp(out,remote_mem+6000-4096+32,4));
     p.offset_count=9;
     CHECK(device_ioctl(NULL,CMD_READ_PTR,(unsigned long)&p)==-EINVAL);
-    CHECK(tasks[0].refs==1);
+    CHECK(tasks[0].refs==2);
 }
 static void test_batch(void) {
     mem_batch_packet_t p={0}; mem_batch_item_t item[3]={{0}};
@@ -292,7 +303,35 @@ static void test_batch(void) {
     CHECK(device_ioctl(NULL,CMD_READ_BATCH,(unsigned long)&p)==0);
     CHECK(item[0].status==-EFAULT);
     for(i=0;i<sizeof(out);i++) CHECK(out[i]==0);
-    CHECK(!live_allocs && tasks[0].refs==1);
+    CHECK(!live_allocs && tasks[0].refs==2);
+}
+static void test_binding(void) {
+    struct file second={0}; mem_packet_t p={0}; qw_caps_t caps={0};
+    unsigned char out[8]; int before;
+    CHECK(device_ioctl(&test_file,CMD_GET_CAPS,(unsigned long)&caps)==0);
+    CHECK(caps.abi_version==2 && (caps.features&QW_FEATURE_BIND_TARGET));
+    p.addr=4096; p.size=8; p.user_buf=(unsigned long)out;
+    CHECK(device_ioctl(&test_file,CMD_READ_MEM,(unsigned long)&p)==-ENOTCONN);
+    p.pid=1;
+    copy_fail_at=copy_count+1;
+    CHECK(device_ioctl(&test_file,CMD_BIND_TARGET,(unsigned long)&p)==-EFAULT);
+    CHECK(!test_context.task && tasks[0].refs==1);
+    copy_fail_at=0;
+    CHECK(device_ioctl(&test_file,CMD_BIND_TARGET,(unsigned long)&p)==0);
+    CHECK(test_context.task==&tasks[0] && tasks[0].refs==2);
+    p.pid=0;
+    CHECK(device_ioctl(&test_file,CMD_READ_MEM,(unsigned long)&p)==0);
+    CHECK(device_open(NULL,&second)==0);
+    p.pid=2;
+    CHECK(device_ioctl(&second,CMD_BIND_TARGET,(unsigned long)&p)==0);
+    CHECK(((struct qw_file*)second.private_data)->task==&tasks[1]);
+    CHECK(test_context.task==&tasks[0]);
+    p.pid=0;
+    CHECK(device_ioctl(&second,CMD_READ_MEM,(unsigned long)&p)==0);
+    CHECK(device_release(NULL,&second)==0 && tasks[1].refs==1 && !live_allocs);
+    before=access_calls; tasks[0].pid=0;
+    CHECK(device_ioctl(&test_file,CMD_READ_MEM,(unsigned long)&p)==-ESRCH);
+    CHECK(access_calls==before); tasks[0].pid=1;
 }
 static void test_auth_and_targets(void) {
     mem_packet_t p={0}; unsigned char out[8];
@@ -330,7 +369,7 @@ static void test_hwbp(void) {
     g_register_user_hw_bp=register_event; g_unregister_hw_bp=unregister_event;
     cfg.bp_addr=4096; cfg.mode=3; cfg.reg_count=1; cfg.regs[0]=19;
     registration_count=0; fail_registration_at=0; fire_registration=1;
-    CHECK(hw_bp_setup(&tasks[0],4096,0,0,3,&cfg)==0);
+    CHECK(hw_bp_setup(&tasks[0],4096,0,0,3,&cfg,&test_context)==0);
     CHECK(g_dec_count==1 && g_dec_snaps[0].mode==3);
     CHECK(g_dec_snaps[0].regs[0]==0x123456);
     for(i=1;i<8;i++) CHECK(!g_dec_snaps[0].regs[i]);
@@ -348,14 +387,14 @@ static void test_hwbp(void) {
     CHECK(!g_dec_count && !g_hw_bp_active);
     cfg.regs[0]=19; tasks[0].next=&tasks[1];
     registration_count=0; unregistered=0; fail_registration_at=2;
-    CHECK(hw_bp_setup(&tasks[0],4096,0,0,2,&cfg)==-ENOMEM);
+    CHECK(hw_bp_setup(&tasks[0],4096,0,0,2,&cfg,&test_context)==-ENOMEM);
     CHECK(unregistered==1 && !g_hw_bp_event_count && !g_dec_count);
-    CHECK(tasks[0].refs==1 && tasks[1].refs==1);
-    for(i=0;i<65;i++) tasks[i].next=&tasks[i+1];
+    CHECK(tasks[0].refs==2 && tasks[1].refs==1);
+    for(i=0;i<1025;i++) tasks[i].next=&tasks[i+1];
     registration_count=0;
-    CHECK(hw_bp_setup(&tasks[0],4096,0,0,2,&cfg)==-E2BIG);
+    CHECK(hw_bp_setup(&tasks[0],4096,0,0,2,&cfg,&test_context)==-E2BIG);
     CHECK(!registration_count);
-    for(i=0;i<66;i++) CHECK(tasks[i].refs==1);
+    for(i=0;i<1026;i++) CHECK(tasks[i].refs==(i==0?2:1));
 }
 #else
 static void test_no_hwbp(void) {
@@ -372,6 +411,7 @@ int main(void) {
     reset(); test_pointer_chain();
     reset(); test_batch();
     reset(); test_auth_and_targets();
+    reset(); test_binding();
     reset();
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
     test_hwbp();
@@ -390,21 +430,23 @@ def harness():
                   SOURCE.index("/* ---------- 内核版本兼容:")]
     types = SOURCE[SOURCE.index("typedef struct decoder_snap {"):
                    SOURCE.index("/* ---------- HW Breakpoint 状态")]
-    globals_ = SOURCE[SOURCE.index("static atomic64_t g_total_cpu_ns"):
+    globals_ = SOURCE[SOURCE.index("struct qw_file {"):
                       SOURCE.index("/* 解码器 hook 快照：")]
     state = SOURCE[SOURCE.index("#ifdef CONFIG_HAVE_HW_BREAKPOINT\nstatic DEFINE_MUTEX"):
                    SOURCE.index("/* Remote memory access")]
     helpers = "\n".join(function(x) for x in (
         "qw_range_valid", "qw_access_memory", "manual_read_memory",
         "manual_write_memory", "qw_validate_packet", "qw_resolve_address",
-        "get_target_task"))
+        "get_target_task", "qw_context_target"))
     hw = SOURCE[SOURCE.index("#ifdef CONFIG_HAVE_HW_BREAKPOINT\n/* ==="):
                 SOURCE.index("#endif /* CONFIG_HAVE_HW_BREAKPOINT */")
                 + len("#endif /* CONFIG_HAVE_HW_BREAKPOINT */")]
     capture = SOURCE[SOURCE.index("static struct {\n    spinlock_t lock;"):
                      SOURCE.index("static void qw_capture_store")]
-    return "\n".join((PRELUDE, wire, types, globals_, state, helpers, hw,
-                      capture, function("device_ioctl"), TESTS))
+    context = "static struct qw_file test_context;\nstatic struct file test_file={&test_context};"
+    tests = TESTS.replace("device_ioctl(NULL,", "device_ioctl(&test_file,")
+    return "\n".join((PRELUDE, wire, types, globals_, context, state, helpers, hw,
+                      capture, function("device_ioctl"), function("device_open"), function("device_release"), tests))
 
 
 class FDDriverRegression(unittest.TestCase):
