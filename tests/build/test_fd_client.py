@@ -71,6 +71,9 @@ int bridge_task_refs(int pid) { return tasks[pid-1].refs; }
 void bridge_authorized(int enabled) { authorized=enabled; }
 void bridge_short_access(int enabled) { short_access=enabled; }
 void bridge_fail_next_copy(void) { copy_fail_at=copy_count+1; }
+void bridge_kill_and_reuse_pid_one(void) {
+    tasks[0].pid=0; tasks[2].pid=1; pid_one_override=&tasks[2];
+}
 """
 
 INTEGRATION = r"""
@@ -91,6 +94,7 @@ int bridge_task_refs(int);
 void bridge_authorized(int);
 void bridge_short_access(int);
 void bridge_fail_next_copy(void);
+void bridge_kill_and_reuse_pid_one(void);
 int __wrap_open(const char*,int flags,...) { assert(flags&O_CLOEXEC); return bridge_open(); }
 int __wrap_close(int fd) { return bridge_close(fd); }
 int __wrap_fcntl(int fd,int op,...) { assert(op==F_DUPFD_CLOEXEC); return bridge_dup(fd); }
@@ -148,8 +152,16 @@ int main() {
     assert(qingwei_read_mem(copy,4096,bytes,8)<0 && errno==EFAULT);
     for(int i=0;i<8;i++) assert(!bytes[i]);
     bridge_short_access(0);
+    bridge_kill_and_reuse_pid_one();
+    memset(bytes,0x55,8);
+    assert(qingwei_read_mem(copy,4096,bytes,8)<0 && errno==ESRCH);
+    for(int i=0;i<8;i++) assert(!bytes[i]);
+    assert(bridge_task_refs(1)==2 && bridge_task_refs(3)==1);
+    assert(!qingwei_bind_target(copy,1,"restarted"));
+    assert(!qingwei_read_mem(copy,4096+7,bytes,8));
+    assert(bridge_task_refs(1)==1 && bridge_task_refs(3)==2);
     qingwei_close(copy); qingwei_close(other);
-    assert(!bridge_live_allocations() && bridge_task_refs(1)==1 && bridge_task_refs(2)==1);
+    assert(!bridge_live_allocations() && bridge_task_refs(1)==1 && bridge_task_refs(2)==1 && bridge_task_refs(3)==1);
     bridge_authorized(0);
     assert(qingwei_open()<0 && errno==EPERM);
     assert(!bridge_live_allocations());

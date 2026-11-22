@@ -329,14 +329,26 @@ static int find_pid_by_name(const char *name)
     kvfree(tasks);
     return result > 0 ? result : overflow ? -E2BIG : prefix;
 }
+static void qw_remember_target(struct qw_file *ctx, struct task_struct *task,
+                                int pid, const char *name)
+{
+    get_task_struct(task);
+    if (ctx->task) put_task_struct(ctx->task);
+    ctx->task = task;
+    ctx->pid = pid > 0 ? pid : task_pid_vnr(task);
+    strscpy(ctx->name, name, sizeof(ctx->name));
+}
 static struct task_struct *get_cached_task_for_target(struct qw_file *ctx,
                                                      int pid, const char *name)
 {
     struct task_struct *task;
     struct pid *p;
-    if (ctx->task && pid_alive(ctx->task) && READ_ONCE(ctx->task->mm) &&
+    bool matches = ctx->task &&
         ((pid > 0 && pid == ctx->pid) || (pid <= 0 &&
-         (!name[0] || !strcmp(ctx->name, name))))) {
+         (!name[0] || !strcmp(ctx->name, name))));
+    if (matches) {
+        if (!pid_alive(ctx->task) || !READ_ONCE(ctx->task->mm))
+            return ERR_PTR(-ESRCH);
         get_task_struct(ctx->task);
         return ctx->task;
     }
@@ -348,11 +360,8 @@ static struct task_struct *get_cached_task_for_target(struct qw_file *ctx,
     task = p ? get_pid_task(p, PIDTYPE_PID) : NULL;
     if (p) put_pid(p);
     if (!task) return ERR_PTR(-ESRCH);
-    if (ctx->task) put_task_struct(ctx->task);
-    ctx->task = task;
-    get_task_struct(task);
-    ctx->pid = pid;
-    strscpy(ctx->name, name, sizeof(ctx->name));
+    if (!ctx->task)
+        qw_remember_target(ctx, task, pid, name);
     return task;
 }
 
@@ -629,7 +638,7 @@ static int hw_bp_setup(struct task_struct *task, const hw_bp_cfg_t *cfg,
     threads = kvcalloc(QW_HW_MAX_THREADS, sizeof(*threads), GFP_KERNEL);
     if (!threads) return -ENOMEM;
     rcu_read_lock();
-    for_each_thread(task->group_leader, t) {
+    for_each_thread(task, t) {
         if (n == QW_HW_MAX_THREADS) { overflow = true; break; }
         get_task_struct(t);
         threads[n++] = t;
@@ -1246,7 +1255,12 @@ static long qw_dispatch(struct qw_file *ctx, unsigned int cmd, unsigned long arg
         if (pkt.pid <= 0 && !pkt.pkg_name[0]) return -EINVAL;
         task = get_cached_task_for_target(&candidate, pkt.pid, pkt.pkg_name);
         if (IS_ERR(task)) return PTR_ERR(task);
-        pkt.pid = task_pid_vnr(task);
+        pkt.pid = candidate.pid;
+        if (!pid_alive(task)) {
+            put_task_struct(candidate.task);
+            put_task_struct(task);
+            return -ESRCH;
+        }
         ret = copy_to_user((void __user *)arg, &pkt, sizeof(pkt)) ? -EFAULT : 0;
         if (!ret) {
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
@@ -1275,9 +1289,17 @@ static long qw_dispatch(struct qw_file *ctx, unsigned int cmd, unsigned long arg
         if (copy_to_user((void __user *)arg, &pkt, sizeof(pkt))) return -EFAULT;
         return pkt.pid > 0 ? 0 : pkt.pid;
     }
-    task = get_cached_task_for_target(ctx, pkt.pid, pkt.pkg_name);
+    if (cmd == CMD_GET_BASE && (pkt.pid > 0 || pkt.pkg_name[0])) {
+        struct qw_file candidate = {0};
+        task = get_cached_task_for_target(&candidate, pkt.pid, pkt.pkg_name);
+        if (candidate.task) put_task_struct(candidate.task);
+    } else {
+        task = get_cached_task_for_target(ctx, pkt.pid, pkt.pkg_name);
+    }
     if (IS_ERR(task)) return PTR_ERR(task);
     ret = qw_memory_command(ctx, cmd, arg, &pkt, task);
+    if (!ret && cmd == CMD_GET_BASE)
+        qw_remember_target(ctx, task, pkt.pid, pkt.pkg_name);
     put_task_struct(task);
     return ret;
 }

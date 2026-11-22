@@ -170,6 +170,8 @@ struct task_struct {
 };
 struct pid { int id; };
 static struct task_struct tasks[1026];
+static struct task_struct *pid_one_override;
+static int exit_during_access;
 static unsigned char remote_mem[16384];
 static int find_pid_by_name(const char *s) { return s[0]?1:-EINVAL; }
 static struct pid pid_ref;
@@ -177,6 +179,7 @@ static struct pid *find_get_pid(int pid) {
     if(pid<1 || pid>66) return NULL; pid_ref.id=pid; return &pid_ref;
 }
 static struct task_struct *get_pid_task(struct pid *p,int type) {
+    if(p->id==1 && pid_one_override) { ++pid_one_override->refs; return pid_one_override; }
     ++tasks[p->id-1].refs; return &tasks[p->id-1];
 }
 static void put_pid(struct pid *p) {}
@@ -189,6 +192,11 @@ static int access_process_vm(struct task_struct *t,unsigned long a,void *b,int n
     int actual=n;
     CHECK(!rcu_depth && !irqs_disabled && t->refs>1);
     ++access_calls; last_gup_flags=f;
+    if(exit_during_access) {
+        t->pid=0;
+        if(exit_during_access==1) return 0; /* exit before get_task_mm */
+        /* An already pinned page remains valid until this read releases it. */
+    }
     if (a<4096 || a-4096>sizeof(remote_mem) || n>sizeof(remote_mem)-(a-4096))
         return 0;
     if(short_access) actual=n>1?n/2:0;
@@ -231,6 +239,7 @@ static void reset(void) {
     memset(&test_context,0,sizeof(test_context));
     CHECK(!live_allocs && !irqs_disabled && !rcu_depth);
     authorized=1; short_access=0; access_calls=0; copy_fail_at=0; copy_count=0;
+    pid_one_override=NULL; exit_during_access=0;
     for(i=0;i<1026;i++) {
         CHECK(tasks[i].refs==0 || tasks[i].refs==1);
         tasks[i].pid=i+1; tasks[i].refs=1; tasks[i].group_leader=&tasks[0];
@@ -347,6 +356,30 @@ static void test_auth_and_targets(void) {
     memset(p.pkg_name,'x',sizeof(p.pkg_name));
     CHECK(device_ioctl(NULL,CMD_READ_MEM,(unsigned long)&p)==-EINVAL);
 }
+static void test_exit_and_pid_reuse(void) {
+    mem_packet_t p={0}; unsigned char out[8]; int before;
+    struct task_struct *other;
+    p.pid=1; p.addr=4096; p.size=8; p.user_buf=(unsigned long)out;
+    CHECK(!device_ioctl(&test_file,CMD_BIND_TARGET,(unsigned long)&p));
+    other=qw_context_target(&test_context,2,"",false);
+    CHECK(other==&tasks[1] && test_context.task==&tasks[0]);
+    put_task_struct(other);
+    exit_during_access=1;
+    CHECK(device_ioctl(&test_file,CMD_READ_MEM,(unsigned long)&p)==-EFAULT);
+    exit_during_access=0;
+    tasks[2].pid=1; pid_one_override=&tasks[2]; /* new object, same numeric PID */
+    before=access_calls;
+    CHECK(device_ioctl(&test_file,CMD_READ_MEM,(unsigned long)&p)==-ESRCH);
+    CHECK(access_calls==before && tasks[2].refs==1);
+    CHECK(!device_ioctl(&test_file,CMD_BIND_TARGET,(unsigned long)&p));
+    CHECK(test_context.task==&tasks[2] && tasks[0].refs==1);
+    exit_during_access=2;
+    CHECK(!device_ioctl(&test_file,CMD_READ_MEM,(unsigned long)&p));
+    exit_during_access=0;
+    CHECK(!memcmp(out,remote_mem,8));
+    CHECK(device_ioctl(&test_file,CMD_READ_MEM,(unsigned long)&p)==-ESRCH);
+    CHECK(!live_allocs && tasks[2].refs==2);
+}
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
 static struct perf_event events[64];
 static int registration_count, fail_registration_at, unregistered, fire_registration;
@@ -412,6 +445,7 @@ int main(void) {
     reset(); test_batch();
     reset(); test_auth_and_targets();
     reset(); test_binding();
+    reset(); test_exit_and_pid_reuse();
     reset();
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
     test_hwbp();
@@ -437,7 +471,7 @@ def harness():
     helpers = "\n".join(function(x) for x in (
         "qw_range_valid", "qw_access_memory", "manual_read_memory",
         "manual_write_memory", "qw_validate_packet", "qw_resolve_address",
-        "get_target_task", "qw_context_target"))
+        "get_target_task", "qw_remember_target", "qw_context_target"))
     hw = SOURCE[SOURCE.index("#ifdef CONFIG_HAVE_HW_BREAKPOINT\n/* ==="):
                 SOURCE.index("#endif /* CONFIG_HAVE_HW_BREAKPOINT */")
                 + len("#endif /* CONFIG_HAVE_HW_BREAKPOINT */")]

@@ -456,8 +456,19 @@ static struct task_struct *get_target_task(int pid, const char *pkg_name)
     return task ? task : ERR_PTR(-ESRCH);
 }
 
-/* Called with ctx->lock held. Retain the exact task identity until rebind or
- * final file release; numeric PID reuse must not silently change an attachment. */
+/* Stable per-file attachment: explicit reads of another task do not replace
+ * it. In particular, HWBP self-tests must not make a killed PID reusable. */
+static void qw_remember_target(struct qw_file *ctx, struct task_struct *task,
+                                int pid, const char *name)
+{
+    get_task_struct(task);
+    if (ctx->task)
+        put_task_struct(ctx->task);
+    ctx->task = task;
+    ctx->pid = pid > 0 ? pid : task_pid_vnr(task);
+    strscpy(ctx->name, name, sizeof(ctx->name));
+}
+
 static struct task_struct *qw_context_target(struct qw_file *ctx, int pid,
                                              const char *name, bool fresh)
 {
@@ -480,12 +491,8 @@ static struct task_struct *qw_context_target(struct qw_file *ctx, int pid,
     task = get_target_task(pid, name);
     if (IS_ERR(task))
         return task;
-    if (ctx->task)
-        put_task_struct(ctx->task);
-    ctx->task = task;
-    get_task_struct(task);
-    ctx->pid = task_pid_vnr(task);
-    strscpy(ctx->name, name, sizeof(ctx->name));
+    if (!fresh && !ctx->task)
+        qw_remember_target(ctx, task, pid, name);
     return task;
 }
 
@@ -802,7 +809,7 @@ static int hw_bp_setup(struct task_struct *task, unsigned long bp_addr,
         goto out;
     }
     rcu_read_lock();
-    for_each_thread(task->group_leader, t) {
+    for_each_thread(task, t) {
         if (count == ARRAY_SIZE(g_hw_bp_events)) {
             overflow = true;
             break;
@@ -1321,7 +1328,13 @@ batch_out:
         if (pkt.pid <= 0 && !pkt.pkg_name[0]) { ret = -EINVAL; goto out; }
         task = get_target_task(pkt.pid, pkt.pkg_name);
         if (IS_ERR(task)) { ret = PTR_ERR(task); goto out; }
-        pkt.pid = task_pid_vnr(task);
+        if (pkt.pid <= 0)
+            pkt.pid = task_pid_vnr(task);
+        if (pkt.pid <= 0 || !pid_alive(task)) {
+            put_task_struct(task);
+            ret = -ESRCH;
+            goto out;
+        }
         if (copy_to_user((void __user *)arg, &pkt, sizeof(pkt))) {
             put_task_struct(task);
             ret = -EFAULT;
@@ -1341,7 +1354,8 @@ batch_out:
         strscpy(ctx->name, pkt.pkg_name, sizeof(ctx->name));
         goto out;
     }
-    task = qw_context_target(capture_cmd ? NULL : ctx, pkt.pid, pkt.pkg_name, false);
+    task = qw_context_target(capture_cmd ? NULL : ctx, pkt.pid, pkt.pkg_name,
+                             cmd == CMD_GET_BASE && (pkt.pid > 0 || pkt.pkg_name[0]));
     if (IS_ERR(task)) {
         ret = PTR_ERR(task);
         goto out;
@@ -1367,6 +1381,8 @@ batch_out:
         } else {
             if (copy_to_user((void __user *)pkt.user_buf, &base, sizeof(unsigned long)))
                 ret = -EFAULT;
+            else
+                qw_remember_target(ctx, task, pkt.pid, pkt.pkg_name);
         }
         break;
     }
