@@ -1129,11 +1129,11 @@ static long qw_memory_command(struct qw_file *ctx, unsigned int cmd, unsigned lo
         if (!buf) { ret = -ENOMEM; goto read_out; }
         if (cmd == CMD_READ_PTR && pkt->offset_count) {
             for (i = 0; i < pkt->offset_count; ++i) {
-                u64 ptr = 0, current;
-                if (check_add_overflow(addr, i ? pkt->offsets[i-1] : 0ULL, &current)) {
+                u64 ptr = 0, read_addr;
+                if (check_add_overflow(addr, i ? pkt->offsets[i-1] : 0ULL, &read_addr)) {
                     ret = -EOVERFLOW; break;
                 }
-                ret = qw_read(&reader, current, &ptr, sizeof(ptr));
+                ret = qw_read(&reader, read_addr, &ptr, sizeof(ptr));
                 if (ret) break;
                 addr = ptr;
             }
